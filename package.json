@@ -1,0 +1,157 @@
+{
+  "name": "dial-tools",
+  "displayName": "Surface Dial Tools for VS Code",
+  "description": "Adds features to VS Code specific to the Surface Dial",
+  "version": "1.0.0",
+  "publisher": "petero-dk",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/petero-dk/DialToolsForVSCode"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "surface dial",
+    "dial",
+    "radial controller",
+    "input device"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "dialTools.rotateLeft",
+        "title": "Dial: Rotate Left"
+      },
+      {
+        "command": "dialTools.rotateRight",
+        "title": "Dial: Rotate Right"
+      },
+      {
+        "command": "dialTools.click",
+        "title": "Dial: Click"
+      },
+      {
+        "command": "dialTools.nextMode",
+        "title": "Dial: Next Mode"
+      },
+      {
+        "command": "dialTools.previousMode",
+        "title": "Dial: Previous Mode"
+      },
+      {
+        "command": "dialTools.selectMode",
+        "title": "Dial: Select Mode..."
+      },
+      {
+        "command": "dialTools.setMode.scroll",
+        "title": "Dial: Set Mode to Scroll"
+      },
+      {
+        "command": "dialTools.setMode.zoom",
+        "title": "Dial: Set Mode to Zoom"
+      },
+      {
+        "command": "dialTools.setMode.navigate",
+        "title": "Dial: Set Mode to Navigate"
+      },
+      {
+        "command": "dialTools.setMode.debug",
+        "title": "Dial: Set Mode to Debug"
+      },
+      {
+        "command": "dialTools.setMode.errors",
+        "title": "Dial: Set Mode to Errors"
+      },
+      {
+        "command": "dialTools.setMode.editor",
+        "title": "Dial: Set Mode to Editor"
+      },
+      {
+        "command": "dialTools.setMode.bookmarks",
+        "title": "Dial: Set Mode to Bookmarks"
+      },
+      {
+        "command": "dialTools.setMode.find",
+        "title": "Dial: Set Mode to Find"
+      }
+    ],
+    "configuration": {
+      "title": "Surface Dial Tools",
+      "properties": {
+        "dialTools.defaultMode": {
+          "type": "string",
+          "default": "Scroll",
+          "enum": [
+            "Scroll",
+            "Zoom",
+            "Navigate",
+            "Debug",
+            "Errors",
+            "Editor",
+            "Bookmarks",
+            "Find"
+          ],
+          "description": "Default mode when VS Code starts."
+        },
+        "dialTools.linesToScroll": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 20,
+          "description": "Number of lines to scroll per rotation in Scroll mode."
+        },
+        "dialTools.enabledModes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "Scroll",
+              "Zoom",
+              "Navigate",
+              "Debug",
+              "Errors",
+              "Editor",
+              "Bookmarks",
+              "Find"
+            ]
+          },
+          "default": [
+            "Scroll",
+            "Zoom",
+            "Navigate",
+            "Debug",
+            "Errors",
+            "Editor",
+            "Bookmarks",
+            "Find"
+          ],
+          "description": "Modes included in the mode cycle (in order)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^8.59.1",
+    "@typescript-eslint/parser": "^8.59.1",
+    "eslint": "^8.0.0",
+    "typescript": "^5.3.0"
+  }
+}
