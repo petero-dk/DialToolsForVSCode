@@ -17,6 +17,8 @@ A port of [DialToolsForVS](https://github.com/petero-dk/DialToolsForVS/) — add
 - **Editor** – increment/decrement numbers and lighten/darken hex colors at the cursor.
 - **Bookmarks** – toggle, and navigate to the next/previous bookmark. Integrates with the popular [Bookmarks](https://marketplace.visualstudio.com/items?itemName=alefragnani.Bookmarks) extension when installed.
 - **Find** – find next/previous match in the editor.
+- **Copilot** – navigate and accept GitHub Copilot inline suggestions.
+- **UndoRedo** – undo and redo changes in the editor.
 
 ---
 
@@ -40,6 +42,8 @@ The extension registers VS Code **commands** for each Dial action. Bind your Sur
 | `dialTools.setMode.editor` | Activate Editor mode |
 | `dialTools.setMode.bookmarks` | Activate Bookmarks mode |
 | `dialTools.setMode.find` | Activate Find mode |
+| `dialTools.setMode.copilot` | Activate Copilot mode |
+| `dialTools.setMode.undoRedo` | Activate UndoRedo mode |
 
 ### Mode behaviours
 
@@ -111,6 +115,24 @@ If the [Bookmarks](https://marketplace.visualstudio.com/items?itemName=alefragna
 | Rotate right | Find next match |
 | Rotate left | Find previous match |
 | Click | Open Find widget |
+
+#### Copilot
+
+| Action | Behaviour |
+|---|---|
+| Rotate right | Show next inline suggestion |
+| Rotate left | Show previous inline suggestion |
+| Click | Accept the current inline suggestion |
+
+Requires [GitHub Copilot](https://marketplace.visualstudio.com/items?itemName=GitHub.copilot) to be installed and enabled.
+
+#### UndoRedo
+
+| Action | Behaviour |
+|---|---|
+| Rotate right | Redo |
+| Rotate left | Undo |
+| Click | Open Timeline panel |
 
 ---
 

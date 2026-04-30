@@ -82,6 +82,14 @@
       {
         "command": "dialTools.setMode.find",
         "title": "Dial: Set Mode to Find"
+      },
+      {
+        "command": "dialTools.setMode.copilot",
+        "title": "Dial: Set Mode to Copilot"
+      },
+      {
+        "command": "dialTools.setMode.undoRedo",
+        "title": "Dial: Set Mode to UndoRedo"
       }
     ],
     "configuration": {
@@ -98,7 +106,9 @@
             "Errors",
             "Editor",
             "Bookmarks",
-            "Find"
+            "Find",
+            "Copilot",
+            "UndoRedo"
           ],
           "description": "Default mode when VS Code starts."
         },
@@ -121,7 +131,9 @@
               "Errors",
               "Editor",
               "Bookmarks",
-              "Find"
+              "Find",
+              "Copilot",
+              "UndoRedo"
             ]
           },
           "default": [
@@ -132,7 +144,9 @@
             "Errors",
             "Editor",
             "Bookmarks",
-            "Find"
+            "Find",
+            "Copilot",
+            "UndoRedo"
           ],
           "description": "Modes included in the mode cycle (in order)."
         }

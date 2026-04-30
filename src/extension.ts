@@ -9,6 +9,8 @@ import { ErrorsProvider } from './providers/errorsProvider';
 import { EditorProvider } from './providers/editorProvider';
 import { BookmarksProvider } from './providers/bookmarksProvider';
 import { FindProvider } from './providers/findProvider';
+import { CopilotProvider } from './providers/copilotProvider';
+import { UndoRedoProvider } from './providers/undoRedoProvider';
 
 export function activate(context: vscode.ExtensionContext): void {
     const statusBar = new DialStatusBar('dialTools.selectMode');
@@ -21,7 +23,9 @@ export function activate(context: vscode.ExtensionContext): void {
         new ErrorsProvider(),
         new EditorProvider(),
         new BookmarksProvider(),
-        new FindProvider()
+        new FindProvider(),
+        new CopilotProvider(),
+        new UndoRedoProvider()
     ];
 
     const controller = new DialController(providers, statusBar);
@@ -40,7 +44,9 @@ export function activate(context: vscode.ExtensionContext): void {
         ['dialTools.setMode.errors', () => controller.setModeByName('Errors')],
         ['dialTools.setMode.editor', () => controller.setModeByName('Editor')],
         ['dialTools.setMode.bookmarks', () => controller.setModeByName('Bookmarks')],
-        ['dialTools.setMode.find', () => controller.setModeByName('Find')]
+        ['dialTools.setMode.find', () => controller.setModeByName('Find')],
+        ['dialTools.setMode.copilot', () => controller.setModeByName('Copilot')],
+        ['dialTools.setMode.undoRedo', () => controller.setModeByName('UndoRedo')]
     ];
 
     for (const [id, handler] of cmds) {
