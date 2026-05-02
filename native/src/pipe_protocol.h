@@ -11,6 +11,7 @@ enum class Msg : uint32_t {
     EvtRotation         = 0x12,  // data: double (deltaInDegrees)
     EvtButtonClicked    = 0x13,
     EvtMenuItemSelected = 0x14,  // data: UTF-8 name
+    EvtShutdownComplete = 0x15,  // DLL finished all cleanup; addon safe to unhook+unload
     EvtDebug            = 0x1F,  // data: UTF-8 string
     // Addon → DLL (commands)
     CmdAddMenuItem      = 0x20,  // data: "name\0iconName" (two null-terminated strings)

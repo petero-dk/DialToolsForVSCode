@@ -13,6 +13,8 @@ import { FindProvider } from './providers/findProvider';
 import { CopilotProvider } from './providers/copilotProvider';
 import { UndoRedoProvider } from './providers/undoRedoProvider';
 
+let activeController: DialController | undefined;
+
 export function activate(context: vscode.ExtensionContext): void {
     const output = vscode.window.createOutputChannel('Surface Dial Tools');
     context.subscriptions.push(output);
@@ -39,6 +41,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
     const hardware   = loadNativeController(log);
     const controller = new DialController(providers, statusBar, hardware, log);
+    activeController = controller;
 
     const cmds: [string, () => void | Promise<void>][] = [
         ['dialTools.rotateLeft', () => controller.rotateLeft()],
@@ -68,6 +71,14 @@ export function activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(controller);
 }
 
-export function deactivate(): void {
-    // Cleanup is handled via context.subscriptions
+// Returning Promise<void> causes VS Code to await this before disposing subscriptions
+// or killing the extension host. This ensures the native hook and DLL are fully
+// disengaged (CmdShutdown sent, EvtShutdownComplete received, UnhookWindowsHookEx
+// called) before VS Code proceeds with upgrade/reload/disable.
+export function deactivate(): Promise<void> {
+    return new Promise<void>(resolve => {
+        activeController?.dispose();
+        activeController = undefined;
+        resolve();
+    });
 }

@@ -11,7 +11,7 @@
     </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{DCCB7177-4FA9-B2FE-4731-FC8BCEFCC28D}</ProjectGuid>
+    <ProjectGuid>{30FB3E18-BBB2-5F45-CF70-28724A72E305}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
     <RootNamespace>radial_hook</RootNamespace>
     <IgnoreWarnCompileDuplicatedFilename>true</IgnoreWarnCompileDuplicatedFilename>
@@ -36,7 +36,6 @@
   <PropertyGroup>
     <ExecutablePath>$(ExecutablePath);$(MSBuildProjectDirectory)\..\bin\;$(MSBuildProjectDirectory)\..\bin\</ExecutablePath>
     <IntDir>$(Configuration)\obj\$(ProjectName)\</IntDir>
-    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Release|arm64'">false</LinkIncremental>
     <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Debug|arm64'">true</LinkIncremental>
     <OutDir>$(SolutionDir)$(Configuration)\</OutDir>
     <TargetName>$(ProjectName)</TargetName>
@@ -44,7 +43,7 @@
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|arm64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\include\node;C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\src;C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\deps\openssl\config;C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\deps\openssl\openssl\include;C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\deps\uv\include;C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\deps\zlib;C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\deps\v8\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\include\node;C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\src;C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\deps\openssl\config;C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\deps\openssl\openssl\include;C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\deps\uv\include;C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\deps\zlib;C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\deps\v8\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/Zc:__cplusplus -std:c++20 /Zm2000 /std:c++17 /EHsc /await:strict %(AdditionalOptions)</AdditionalOptions>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <BufferSecurityCheck>true</BufferSecurityCheck>
@@ -56,36 +55,30 @@
       <OmitFramePointers>false</OmitFramePointers>
       <Optimization>Disabled</Optimization>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
-      <PreprocessorDefinitions>NODE_GYP_MODULE_NAME=radial_hook;USING_UV_SHARED=1;USING_V8_SHARED=1;V8_DEPRECATION_WARNINGS=1;_GLIBCXX_USE_CXX11_ABI=1;_FILE_OFFSET_BITS=64;ELECTRON_ENSURE_CONFIG_GYPI;USING_ELECTRON_CONFIG_GYPI;V8_COMPRESS_POINTERS;V8_COMPRESS_POINTERS_IN_SHARED_CAGE;V8_31BIT_SMIS_ON_64BIT_ARCH;V8_ENABLE_SANDBOX;V8_EXTERNAL_CODE_SPACE;WIN32;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_HAS_EXCEPTIONS=0;NOMINMAX;OPENSSL_NO_PINSHARED;OPENSSL_THREADS;OPENSSL_NO_ASM;_WIN32_WINNT=0x0A00;WIN32_LEAN_AND_MEAN;RADIAL_HOOK_EXPORTS;HOST_BINARY=&quot;node.exe&quot;;DEBUG;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NODE_GYP_MODULE_NAME=radial_hook;USING_UV_SHARED=1;USING_V8_SHARED=1;V8_DEPRECATION_WARNINGS=1;_GLIBCXX_USE_CXX11_ABI=1;_FILE_OFFSET_BITS=64;WIN32;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_HAS_EXCEPTIONS=0;NOMINMAX;OPENSSL_NO_PINSHARED;OPENSSL_THREADS;_WIN32_WINNT=0x0A00;WIN32_LEAN_AND_MEAN;RADIAL_HOOK_EXPORTS;HOST_BINARY=&quot;node.exe&quot;;DEBUG;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <StringPooling>true</StringPooling>
       <SuppressStartupBanner>true</SuppressStartupBanner>
       <TreatWarningAsError>false</TreatWarningAsError>
       <WarningLevel>Level3</WarningLevel>
-      <WholeProgramOptimization>true</WholeProgramOptimization>
     </ClCompile>
-    <Lib>
-      <AdditionalOptions>/LTCG:INCREMENTAL %(AdditionalOptions)</AdditionalOptions>
-    </Lib>
     <Link>
-      <AdditionalDependencies>kernel32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;oleaut32.lib;uuid.lib;odbc32.lib;DelayImp.lib;&quot;C:\\Users\\Peter\\AppData\\Local\\node-gyp\\Cache\\39.8.8\\arm64\\node.lib&quot;;runtimeobject.lib;ole32.lib;user32.lib</AdditionalDependencies>
-      <AdditionalOptions>/LTCG:INCREMENTAL /ignore:4199 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalDependencies>kernel32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;oleaut32.lib;uuid.lib;odbc32.lib;DelayImp.lib;&quot;C:\\Users\\Peter\\AppData\\Local\\node-gyp\\Cache\\22.22.1\\arm64\\node.lib&quot;;runtimeobject.lib;ole32.lib;user32.lib</AdditionalDependencies>
+      <AdditionalOptions>/ignore:4199 %(AdditionalOptions)</AdditionalOptions>
       <DelayLoadDLLs>node.exe;%(DelayLoadDLLs)</DelayLoadDLLs>
-      <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <OptimizeReferences>true</OptimizeReferences>
       <OutputFile>$(OutDir)$(ProjectName)$(TargetExt)</OutputFile>
       <SuppressStartupBanner>true</SuppressStartupBanner>
       <TargetMachine>NotSet</TargetMachine>
     </Link>
     <ResourceCompile>
-      <AdditionalIncludeDirectories>C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\include\node;C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\src;C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\deps\openssl\config;C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\deps\openssl\openssl\include;C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\deps\uv\include;C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\deps\zlib;C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\deps\v8\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>NODE_GYP_MODULE_NAME=radial_hook;USING_UV_SHARED=1;USING_V8_SHARED=1;V8_DEPRECATION_WARNINGS=1;_GLIBCXX_USE_CXX11_ABI=1;_FILE_OFFSET_BITS=64;ELECTRON_ENSURE_CONFIG_GYPI;USING_ELECTRON_CONFIG_GYPI;V8_COMPRESS_POINTERS;V8_COMPRESS_POINTERS_IN_SHARED_CAGE;V8_31BIT_SMIS_ON_64BIT_ARCH;V8_ENABLE_SANDBOX;V8_EXTERNAL_CODE_SPACE;WIN32;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_HAS_EXCEPTIONS=0;NOMINMAX;OPENSSL_NO_PINSHARED;OPENSSL_THREADS;OPENSSL_NO_ASM;_WIN32_WINNT=0x0A00;WIN32_LEAN_AND_MEAN;RADIAL_HOOK_EXPORTS;HOST_BINARY=&quot;node.exe&quot;;DEBUG;_DEBUG;%(PreprocessorDefinitions);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\include\node;C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\src;C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\deps\openssl\config;C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\deps\openssl\openssl\include;C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\deps\uv\include;C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\deps\zlib;C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\deps\v8\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>NODE_GYP_MODULE_NAME=radial_hook;USING_UV_SHARED=1;USING_V8_SHARED=1;V8_DEPRECATION_WARNINGS=1;_GLIBCXX_USE_CXX11_ABI=1;_FILE_OFFSET_BITS=64;WIN32;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_HAS_EXCEPTIONS=0;NOMINMAX;OPENSSL_NO_PINSHARED;OPENSSL_THREADS;_WIN32_WINNT=0x0A00;WIN32_LEAN_AND_MEAN;RADIAL_HOOK_EXPORTS;HOST_BINARY=&quot;node.exe&quot;;DEBUG;_DEBUG;%(PreprocessorDefinitions);%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ResourceCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|arm64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\include\node;C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\src;C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\deps\openssl\config;C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\deps\openssl\openssl\include;C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\deps\uv\include;C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\deps\zlib;C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\deps\v8\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\include\node;C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\src;C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\deps\openssl\config;C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\deps\openssl\openssl\include;C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\deps\uv\include;C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\deps\zlib;C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\deps\v8\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/Zc:__cplusplus -std:c++20 /Zm2000 /std:c++17 /EHsc /await:strict %(AdditionalOptions)</AdditionalOptions>
       <BufferSecurityCheck>true</BufferSecurityCheck>
       <DebugInformationFormat>OldStyle</DebugInformationFormat>
@@ -100,32 +93,26 @@
       <OmitFramePointers>true</OmitFramePointers>
       <Optimization>Full</Optimization>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
-      <PreprocessorDefinitions>NODE_GYP_MODULE_NAME=radial_hook;USING_UV_SHARED=1;USING_V8_SHARED=1;V8_DEPRECATION_WARNINGS=1;_GLIBCXX_USE_CXX11_ABI=1;_FILE_OFFSET_BITS=64;ELECTRON_ENSURE_CONFIG_GYPI;USING_ELECTRON_CONFIG_GYPI;V8_COMPRESS_POINTERS;V8_COMPRESS_POINTERS_IN_SHARED_CAGE;V8_31BIT_SMIS_ON_64BIT_ARCH;V8_ENABLE_SANDBOX;V8_EXTERNAL_CODE_SPACE;WIN32;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_HAS_EXCEPTIONS=0;NOMINMAX;OPENSSL_NO_PINSHARED;OPENSSL_THREADS;OPENSSL_NO_ASM;_WIN32_WINNT=0x0A00;WIN32_LEAN_AND_MEAN;RADIAL_HOOK_EXPORTS;HOST_BINARY=&quot;node.exe&quot;;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NODE_GYP_MODULE_NAME=radial_hook;USING_UV_SHARED=1;USING_V8_SHARED=1;V8_DEPRECATION_WARNINGS=1;_GLIBCXX_USE_CXX11_ABI=1;_FILE_OFFSET_BITS=64;WIN32;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_HAS_EXCEPTIONS=0;NOMINMAX;OPENSSL_NO_PINSHARED;OPENSSL_THREADS;_WIN32_WINNT=0x0A00;WIN32_LEAN_AND_MEAN;RADIAL_HOOK_EXPORTS;HOST_BINARY=&quot;node.exe&quot;;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <RuntimeTypeInfo>false</RuntimeTypeInfo>
       <StringPooling>true</StringPooling>
       <SuppressStartupBanner>true</SuppressStartupBanner>
       <TreatWarningAsError>false</TreatWarningAsError>
       <WarningLevel>Level3</WarningLevel>
-      <WholeProgramOptimization>true</WholeProgramOptimization>
     </ClCompile>
-    <Lib>
-      <AdditionalOptions>/LTCG:INCREMENTAL %(AdditionalOptions)</AdditionalOptions>
-    </Lib>
     <Link>
-      <AdditionalDependencies>kernel32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;oleaut32.lib;uuid.lib;odbc32.lib;DelayImp.lib;&quot;C:\\Users\\Peter\\AppData\\Local\\node-gyp\\Cache\\39.8.8\\arm64\\node.lib&quot;;runtimeobject.lib;ole32.lib;user32.lib</AdditionalDependencies>
-      <AdditionalOptions>/LTCG:INCREMENTAL /ignore:4199 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalDependencies>kernel32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;oleaut32.lib;uuid.lib;odbc32.lib;DelayImp.lib;&quot;C:\\Users\\Peter\\AppData\\Local\\node-gyp\\Cache\\22.22.1\\arm64\\node.lib&quot;;runtimeobject.lib;ole32.lib;user32.lib</AdditionalDependencies>
+      <AdditionalOptions>/ignore:4199 %(AdditionalOptions)</AdditionalOptions>
       <DelayLoadDLLs>node.exe;%(DelayLoadDLLs)</DelayLoadDLLs>
-      <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <OptimizeReferences>true</OptimizeReferences>
       <OutputFile>$(OutDir)$(ProjectName)$(TargetExt)</OutputFile>
       <SuppressStartupBanner>true</SuppressStartupBanner>
       <TargetMachine>NotSet</TargetMachine>
     </Link>
     <ResourceCompile>
-      <AdditionalIncludeDirectories>C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\include\node;C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\src;C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\deps\openssl\config;C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\deps\openssl\openssl\include;C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\deps\uv\include;C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\deps\zlib;C:\Users\Peter\AppData\Local\node-gyp\Cache\39.8.8\deps\v8\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>NODE_GYP_MODULE_NAME=radial_hook;USING_UV_SHARED=1;USING_V8_SHARED=1;V8_DEPRECATION_WARNINGS=1;_GLIBCXX_USE_CXX11_ABI=1;_FILE_OFFSET_BITS=64;ELECTRON_ENSURE_CONFIG_GYPI;USING_ELECTRON_CONFIG_GYPI;V8_COMPRESS_POINTERS;V8_COMPRESS_POINTERS_IN_SHARED_CAGE;V8_31BIT_SMIS_ON_64BIT_ARCH;V8_ENABLE_SANDBOX;V8_EXTERNAL_CODE_SPACE;WIN32;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_HAS_EXCEPTIONS=0;NOMINMAX;OPENSSL_NO_PINSHARED;OPENSSL_THREADS;OPENSSL_NO_ASM;_WIN32_WINNT=0x0A00;WIN32_LEAN_AND_MEAN;RADIAL_HOOK_EXPORTS;HOST_BINARY=&quot;node.exe&quot;;%(PreprocessorDefinitions);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\include\node;C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\src;C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\deps\openssl\config;C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\deps\openssl\openssl\include;C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\deps\uv\include;C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\deps\zlib;C:\Users\Peter\AppData\Local\node-gyp\Cache\22.22.1\deps\v8\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>NODE_GYP_MODULE_NAME=radial_hook;USING_UV_SHARED=1;USING_V8_SHARED=1;V8_DEPRECATION_WARNINGS=1;_GLIBCXX_USE_CXX11_ABI=1;_FILE_OFFSET_BITS=64;WIN32;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_HAS_EXCEPTIONS=0;NOMINMAX;OPENSSL_NO_PINSHARED;OPENSSL_THREADS;_WIN32_WINNT=0x0A00;WIN32_LEAN_AND_MEAN;RADIAL_HOOK_EXPORTS;HOST_BINARY=&quot;node.exe&quot;;%(PreprocessorDefinitions);%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ResourceCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -135,7 +122,7 @@
     <ClCompile Include="..\src\radial_hook.cpp">
       <ObjectFileName>$(IntDir)\src\radial_hook.obj</ObjectFileName>
     </ClCompile>
-    <ClCompile Include="c:\Users\Peter\source\GitHub\DialToolsForVSCode\node_modules\node-gyp\src\win_delay_load_hook.cc"/>
+    <ClCompile Include="C:\Users\Peter\source\GitHub\DialToolsForVSCode\node_modules\node-gyp\src\win_delay_load_hook.cc"/>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets"/>
   <Import Project="$(VCTargetsPath)\BuildCustomizations\masm.targets"/>

@@ -615,6 +615,11 @@ private:
             }
             break;
 
+        case Msg::EvtShutdownComplete:
+            DebugLog("event: ShutdownComplete");
+            pipeStop_ = true; // exit the read loop; DLL will close its pipe next
+            break;
+
         case Msg::EvtDebug:
             DebugLog(payload);
             break;
@@ -648,25 +653,40 @@ private:
 
         pipeStop_ = true;
 
-        // Closing the event pipe server will unblock any pending ReadFile in
-        // PipeReaderThread, causing it to return.
+        // Wait for PipeReaderThread to exit naturally: the DLL sends EvtShutdownComplete,
+        // then closes its pipe handle, which unblocks our ReadFile and lets the thread exit.
+        // This gives us a reliable signal that the DLL has finished all WinRT teardown.
+        // Fallback: if the DLL doesn't respond within 3 s (crash, deadlock), force-close
+        // evtPipeServer_ to unblock ReadFile and proceed anyway.
+        if (pipeReaderThread_.joinable()) {
+            constexpr DWORD kShutdownTimeoutMs = 3000;
+            DWORD waitResult = WaitForSingleObject(
+                pipeReaderThread_.native_handle(), kShutdownTimeoutMs);
+            if (waitResult == WAIT_TIMEOUT) {
+                DebugLog("cleanup(): DLL shutdown timed out — force-closing event pipe");
+                if (evtPipeServer_ != INVALID_HANDLE_VALUE) {
+                    CloseHandle(evtPipeServer_);
+                    evtPipeServer_ = INVALID_HANDLE_VALUE;
+                }
+            }
+            pipeReaderThread_.join();
+        }
+
         if (evtPipeServer_ != INVALID_HANDLE_VALUE) {
             CloseHandle(evtPipeServer_);
             evtPipeServer_ = INVALID_HANDLE_VALUE;
         }
 
-        if (pipeReaderThread_.joinable())
-            pipeReaderThread_.join();
-
         DebugLog("cleanup(): pipe reader thread joined");
 
+        // Safe to unhook now: DLL sent EvtShutdownComplete (or timed out).
+        // The DLL holds its own extra refcount via GetModuleHandleEx in GetMsgProc
+        // and releases it via FreeLibraryAndExitThread, so UnhookWindowsHookEx
+        // will not drop the refcount to zero while DLL code is still executing.
         if (hook_) {
             UnhookWindowsHookEx(hook_);
             hook_ = nullptr;
         }
-
-        // Give the DLL a moment to finish teardown before we unload it
-        Sleep(500);
 
         if (cmdPipeServer_ != INVALID_HANDLE_VALUE) {
             CloseHandle(cmdPipeServer_);

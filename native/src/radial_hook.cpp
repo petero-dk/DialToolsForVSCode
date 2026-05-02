@@ -520,9 +520,18 @@ static void InitDll() {
     // Run the WinRT thread (blocks until shutdown)
     WinRTThread(rendererHwnd);
 
-    // Cleanup
+    // All cleanup done — signal the addon before closing pipes.
+    // After this, the addon will join its pipe reader thread, then unhook and unload.
+    SendMsg(Msg::EvtShutdownComplete);
+
     CloseHandle(g_evtPipe); g_evtPipe = INVALID_HANDLE_VALUE;
     CloseHandle(g_cmdPipe); g_cmdPipe = INVALID_HANDLE_VALUE;
+
+    // Release the extra refcount we took in GetMsgProc and exit this thread atomically.
+    // FreeLibraryAndExitThread is the safe way to self-unload from a thread: it
+    // prevents a "return into unmapped code" crash if our refcount was the last one.
+    FreeLibraryAndExitThread(g_hModule, 0);
+    // unreachable
 }
 
 // ---------------------------------------------------------------------------
@@ -530,9 +539,15 @@ static void InitDll() {
 // ---------------------------------------------------------------------------
 extern "C" __declspec(dllexport)
 LRESULT CALLBACK GetMsgProc(int nCode, WPARAM wParam, LPARAM lParam) {
-    // On first invocation, spawn the init thread
+    // On first invocation, spawn the init thread.
+    // Increment our own refcount before detaching so that UnhookWindowsHookEx
+    // (which decrements to 1) cannot unload us while InitDll is still running.
+    // InitDll releases this extra reference at its very end via FreeLibraryAndExitThread.
     bool expected = false;
     if (g_initDone.compare_exchange_strong(expected, true)) {
+        HMODULE hSelf = nullptr;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                           reinterpret_cast<LPCWSTR>(&GetMsgProc), &hSelf);
         std::thread(InitDll).detach();
     }
     return CallNextHookEx(nullptr, nCode, wParam, lParam);
