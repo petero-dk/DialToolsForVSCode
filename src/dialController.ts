@@ -1,21 +1,67 @@
 import * as vscode from 'vscode';
 import { IDialProvider } from './providers/baseProvider';
 import { DialStatusBar } from './statusBar';
+import { DialHardwareEvents, KnownIcon } from './nativeRadialController';
+
+// Maps provider names to the best matching WinRT known icon
+const PROVIDER_ICONS: Record<string, KnownIcon> = {
+    'Scroll':    'scroll',
+    'Zoom':      'zoom',
+    'Navigate':  'ruler',
+    'Debug':     'inkThickness',
+    'Errors':    'penType',
+    'Editor':    'inkColor',
+    'Bookmarks': 'ruler',
+    'Find':      'scroll',
+    'Copilot':   'nextPreviousTrack',
+    'UndoRedo':  'undoRedo',
+};
 
 export class DialController implements vscode.Disposable {
     private providers: IDialProvider[];
     private currentProviderIndex: number;
     private readonly statusBar: DialStatusBar;
     private readonly disposables: vscode.Disposable[] = [];
+    private hardware: DialHardwareEvents | null = null;
+    private readonly log: (msg: string) => void;
 
     constructor(
         providers: IDialProvider[],
-        statusBar: DialStatusBar
+        statusBar: DialStatusBar,
+        hardware: DialHardwareEvents | null = null,
+        log: (msg: string) => void = () => {}
     ) {
         this.statusBar = statusBar;
+        this.hardware  = hardware;
+        this.log = log;
         this.providers = this.buildEnabledProviders(providers);
         this.currentProviderIndex = this.resolveDefaultIndex();
         this.updateStatusBar();
+        this.syncHardwareMenu();
+
+        if (hardware) {
+            this.log('DialController: wiring hardware event handlers');
+            hardware.onRotate(delta => {
+                this.log(`DialController: onRotate ${delta}`);
+                if (delta < 0) { this.rotateLeft(); } else { this.rotateRight(); }
+            });
+            hardware.onButtonClick(() => {
+                this.log('DialController: onButtonClick');
+                this.click();
+            });
+            hardware.onMenuItemSelected(name => {
+                this.log(`DialController: onMenuItemSelected ${name}`);
+                this.setModeByName(name);
+            });
+            hardware.onControlAcquired(() => {
+                this.log('DialController: onControlAcquired');
+            });
+            hardware.onControlLost(() => {
+                this.log('DialController: onControlLost');
+            });
+        } else {
+            this.log('DialController: no native hardware available');
+        }
 
         // Rebuild provider list when settings change
         this.disposables.push(
@@ -27,6 +73,7 @@ export class DialController implements vscode.Disposable {
                     this.providers = this.buildEnabledProviders(providers);
                     this.currentProviderIndex = this.resolveDefaultIndex();
                     this.updateStatusBar();
+                    this.syncHardwareMenu();
                 }
             })
         );
@@ -175,7 +222,19 @@ export class DialController implements vscode.Disposable {
         }
     }
 
+    private syncHardwareMenu(): void {
+        if (!this.hardware) { return; }
+        this.log('DialController: syncing hardware menu items');
+        this.hardware.clearMenuItems();
+        for (const p of this.providers) {
+            const icon = PROVIDER_ICONS[p.name] ?? 'scroll';
+            this.log(`DialController: addMenuItem ${p.name} (${icon})`);
+            this.hardware.addMenuItem(p.name, icon);
+        }
+    }
+
     dispose(): void {
+        this.hardware?.dispose();
         this.statusBar.dispose();
         this.disposables.forEach(d => d.dispose());
     }

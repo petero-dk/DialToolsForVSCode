@@ -1,4 +1,7 @@
 src/
+native/src/
+native/build/obj.target/
+native/build/Debug/
 node_modules/
 .vscode-test/
 *.vsix

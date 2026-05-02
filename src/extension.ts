@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { DialController } from './dialController';
 import { DialStatusBar } from './statusBar';
+import { loadNativeController } from './nativeRadialController';
 import { ScrollProvider } from './providers/scrollProvider';
 import { ZoomProvider } from './providers/zoomProvider';
 import { NavigateProvider } from './providers/navigateProvider';
@@ -13,6 +14,14 @@ import { CopilotProvider } from './providers/copilotProvider';
 import { UndoRedoProvider } from './providers/undoRedoProvider';
 
 export function activate(context: vscode.ExtensionContext): void {
+    const output = vscode.window.createOutputChannel('Surface Dial Tools');
+    context.subscriptions.push(output);
+    const log = (msg: string) => {
+        output.appendLine(msg);
+        console.log('[DialTools]', msg);
+    };
+    output.show(true); // reveal without stealing focus
+
     const statusBar = new DialStatusBar('dialTools.selectMode');
 
     const providers = [
@@ -28,7 +37,8 @@ export function activate(context: vscode.ExtensionContext): void {
         new UndoRedoProvider()
     ];
 
-    const controller = new DialController(providers, statusBar);
+    const hardware   = loadNativeController(log);
+    const controller = new DialController(providers, statusBar, hardware, log);
 
     const cmds: [string, () => void | Promise<void>][] = [
         ['dialTools.rotateLeft', () => controller.rotateLeft()],

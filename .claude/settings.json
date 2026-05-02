@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node-gyp configure *)",
+      "PowerShell($nodeGyp = \\(node -e \"require.resolve\\('node-gyp/bin/node-gyp'\\)\"\\).Trim\\(\\); Write-Host \"nodeGyp: $nodeGyp\"; cd \"c:\\\\Users\\\\Peter\\\\source\\\\GitHub\\\\DialToolsForVSCode\\\\native\"; & node \"$nodeGyp\" configure build 2>&1)",
+      "PowerShell(cd \"c:\\\\Users\\\\Peter\\\\source\\\\GitHub\\\\DialToolsForVSCode\\\\native\"; & node \"$PWD\\\\..\\\\node_modules\\\\node-gyp\\\\bin\\\\node-gyp.js\" configure build 2>&1)",
+      "Read(//c/Users/Peter/AppData/Local/Temp/**)",
+      "PowerShell(Get-Command code -ErrorAction SilentlyContinue)",
+      "PowerShell(cd \"c:\\\\Users\\\\Peter\\\\source\\\\GitHub\\\\DialToolsForVSCode\"; $env:VSCODE_ELECTRON_VERSION=\"39.8.7\"; node scripts/rebuild-for-vscode.js 2>&1)",
+      "PowerShell(cd \"c:\\\\Users\\\\Peter\\\\source\\\\GitHub\\\\DialToolsForVSCode\"; npx tsc -p ./ 2>&1; $env:VSCODE_ELECTRON_VERSION=\"39.8.7\"; node scripts/rebuild-for-vscode.js)",
+      "Bash(VSCODE_ELECTRON_VERSION=39.8.8 node scripts/rebuild-for-vscode.js)"
+    ]
+  }
+}
