@@ -146,12 +146,66 @@ Requires [GitHub Copilot](https://marketplace.visualstudio.com/items?itemName=Gi
 
 ---
 
-## Surface Dial configuration (Windows)
+## Hardware integration (Windows)
 
-On Windows you can configure the Surface Dial to send custom keyboard shortcuts:
+The extension includes a native C++/WinRT addon that registers directly with the Windows [`RadialController`](https://learn.microsoft.com/en-us/uwp/api/windows.ui.input.radialcontroller) API. On startup the extension:
 
-1. Open **Surface app** or **Windows Settings → Bluetooth & devices → Wheel**.
-2. Add a custom tool for VS Code.
-3. Assign keyboard shortcuts to the rotate left, rotate right, and click gestures.
-4. Bind those same keyboard shortcuts to `dialTools.rotateLeft`, `dialTools.rotateRight`, and `dialTools.click` in VS Code's keyboard shortcut editor.
+1. Loads `native/build/Release/radial_controller.node`.
+2. Creates a `RadialController` bound to a hidden message window using `IRadialControllerInterop::CreateForWindow`.
+3. Populates the dial's overlay menu (hold the dial to open it) with one item per enabled mode.
+4. Receives rotation and click events directly from the hardware — no keyboard shortcut configuration required.
+
+If the native addon cannot be loaded (non-Windows OS, missing build, or unsupported hardware), the extension falls back silently and continues to work via keyboard shortcuts bound to the registered VS Code commands.
+
+---
+
+## Building the native addon
+
+The addon must be compiled before the extension can use hardware input. You need:
+
+- Windows 10/11
+- [Visual Studio](https://visualstudio.microsoft.com/) with the **Desktop development with C++** workload
+- Node.js (the same version used by VS Code's extension host)
+
+```
+npm install       # also runs the node-gyp VS version patch automatically
+npm run build-native
+```
+
+The compiled addon is written to `native/build/Release/radial_controller.node`.
+
+> **Note for VS 2026 users:** `node-gyp` does not yet recognise Visual Studio 2026 (version 18) out of the box. The `postinstall` script in this repo patches the local copy of `node-gyp` automatically. If you upgrade `node-gyp` via `npm install`, re-run `node scripts/patch-node-gyp.js` to reapply the patch.
+
+---
+
+## Developing and debugging
+
+### Prerequisites
+
+```
+npm install
+npm run build-native
+npm run compile
+```
+
+### Launch the extension host
+
+Press **F5** (or run **Run Extension** from the Run & Debug panel). This opens a new VS Code window with the extension loaded. The **Extension Development Host** window title confirms it is active.
+
+You can set breakpoints in any `.ts` file under `src/` — the launch config maps compiled output back to sources automatically via `outFiles`.
+
+### Diagnose native addon load failures
+
+If the dial menu items do not appear, check whether the native addon loaded successfully:
+
+1. Open **Help → Toggle Developer Tools** in the Extension Development Host window.
+2. In the Console tab, look for errors starting with `radial_controller`.
+3. Common causes:
+   - `radial_controller.node` was not built — run `npm run build-native`.
+   - Node.js ABI mismatch — rebuild with `npm run rebuild-native` to target the correct Node version.
+   - Running on a non-Windows OS — the extension skips hardware init silently.
+
+### Logging from the native addon
+
+The extension host output is visible in **Output → Log (Extension Host)**. The `loadNativeController` wrapper in `src/nativeRadialController.ts` catches load errors; add a `console.error` there to surface them during development.
 
