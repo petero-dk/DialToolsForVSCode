@@ -22,17 +22,46 @@ if (process.platform !== 'win32') {
 }
 
 // ---------------------------------------------------------------------------
-// Detect VS Code's Node.js version (from Code.exe --version)
+// Detect VS Code's Node.js version
 // ---------------------------------------------------------------------------
 function findVSCodeInstall() {
+    // LOCALAPPDATA may be unset in some shells (Git Bash, Claude Code sandbox, etc.)
+    // so fall back to constructing the path from the home directory.
+    const localAppData = process.env.LOCALAPPDATA
+        || path.join(os.homedir(), 'AppData', 'Local');
+
     const candidates = [
-        path.join(process.env.LOCALAPPDATA ?? '', 'Programs', 'Microsoft VS Code'),
+        path.join(localAppData, 'Programs', 'Microsoft VS Code'),
+        path.join(localAppData, 'Programs', 'Microsoft VS Code Insiders'),
         'C:\\Program Files\\Microsoft VS Code',
+        'C:\\Program Files\\Microsoft VS Code Insiders',
+        'C:\\Program Files (x86)\\Microsoft VS Code',
     ];
-    return candidates.find(p => fs.existsSync(path.join(p, 'Code.exe'))) ?? null;
+
+    const found = candidates.find(p => fs.existsSync(path.join(p, 'Code.exe')));
+    if (!found) {
+        console.error('Searched for Code.exe in:\n' +
+            candidates.map(p => '  ' + p).join('\n'));
+    }
+    return found ?? null;
 }
 
 function findVSCodeNodeVersion(installDir) {
+    // Prefer reading from VS Code's package.json in resources/app — no process spawn needed.
+    const pkgPath = path.join(installDir, 'resources', 'app', 'package.json');
+    if (fs.existsSync(pkgPath)) {
+        try {
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+            // pkg.version is the VS Code version (e.g. "1.100.2"), not the Node version.
+            // The embedded Node version is listed under pkg.engines.node when present.
+            if (pkg.engines && pkg.engines.node) {
+                const m = pkg.engines.node.match(/v?(\d+\.\d+\.\d+)/);
+                if (m) return m[1];
+            }
+        } catch { /* fall through */ }
+    }
+
+    // Fallback: run Code.exe --version (slower, may time out in sandboxed environments)
     try {
         const out = execFileSync(path.join(installDir, 'Code.exe'),
             ['--version'], { encoding: 'utf8', timeout: 10000 }).trim();
@@ -77,20 +106,26 @@ function findVsDevCmd() {
 // Main
 // ---------------------------------------------------------------------------
 const electronVersion = process.env.VSCODE_ELECTRON_VERSION ?? null;
+const nodeVersionEnv  = process.env.VSCODE_NODE_VERSION    ?? null;
 
 const installDir  = findVSCodeInstall();
 const targetArch  = installDir ? findVSCodeArch(installDir) : 'x64';
 
 // Avoid invoking Code.exe unless we need a Node fallback target.
-const nodeVersion = (!electronVersion && installDir)
-    ? findVSCodeNodeVersion(installDir)
-    : null;
+const nodeVersion = nodeVersionEnv
+    ?? ((!electronVersion && installDir) ? findVSCodeNodeVersion(installDir) : null);
 
 if (!electronVersion && !nodeVersion) {
     console.error(
-        'Could not determine VS Code\'s version.\n' +
-        'Ensure VS Code is installed at the default location, or set\n' +
-        'VSCODE_ELECTRON_VERSION=<version> (shown in the Surface Dial Tools output channel).'
+        'Could not determine VS Code\'s Node.js version.\n\n' +
+        'Option 1 — re-enable the extension, check the "Surface Dial Tools" output\n' +
+        '           channel for a line like:\n' +
+        '             Native RadialController: Node ABI 127, Electron 34.5.0, Node v22.x.x\n' +
+        '           then run:\n' +
+        '             $env:VSCODE_ELECTRON_VERSION="34.5.0"; npm run rebuild-native\n\n' +
+        'Option 2 — pass the Node version directly (from the "Node v22.x.x" value):\n' +
+        '             $env:VSCODE_NODE_VERSION="22.22.1"; npm run rebuild-native\n\n' +
+        'Option 3 — install VS Code at the default location and retry.'
     );
     process.exit(1);
 }

@@ -43,6 +43,20 @@ export function activate(context: vscode.ExtensionContext): void {
     const controller = new DialController(providers, statusBar, hardware, log);
     activeController = controller;
 
+    if (!hardware) {
+        let retryTimer: ReturnType<typeof setTimeout> | undefined;
+        const retry = () => {
+            const hw = loadNativeController(log);
+            if (hw) {
+                controller.connectHardware(hw);
+            } else {
+                retryTimer = setTimeout(retry, 10_000);
+            }
+        };
+        retryTimer = setTimeout(retry, 10_000);
+        context.subscriptions.push({ dispose: () => clearTimeout(retryTimer) });
+    }
+
     const cmds: [string, () => void | Promise<void>][] = [
         ['dialTools.rotateLeft', () => controller.rotateLeft()],
         ['dialTools.rotateRight', () => controller.rotateRight()],

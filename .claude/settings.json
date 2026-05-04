@@ -11,7 +11,8 @@
       "Bash(VSCODE_ELECTRON_VERSION=39.8.8 node scripts/rebuild-for-vscode.js)",
       "Bash(findstr /i \"rebuild-native\\\\|build\")",
       "Bash(node -e \"const p=require\\('./package.json'\\); console.log\\(JSON.stringify\\(p.scripts,null,2\\)\\)\")",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(node scripts/rebuild-for-vscode.js)"
     ]
   }
 }

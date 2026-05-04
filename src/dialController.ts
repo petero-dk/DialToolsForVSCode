@@ -37,28 +37,9 @@ export class DialController implements vscode.Disposable {
         this.providers = this.buildEnabledProviders(providers);
         this.currentProviderIndex = this.resolveDefaultIndex();
         this.updateStatusBar();
-        this.syncHardwareMenu();
 
         if (hardware) {
-            this.log('DialController: wiring hardware event handlers');
-            hardware.onRotate(delta => {
-                this.log(`DialController: onRotate ${delta}`);
-                if (delta < 0) { this.rotateLeft(); } else { this.rotateRight(); }
-            });
-            hardware.onButtonClick(() => {
-                this.log('DialController: onButtonClick');
-                this.click();
-            });
-            hardware.onMenuItemSelected(name => {
-                this.log(`DialController: onMenuItemSelected ${name}`);
-                this.setModeByName(name);
-            });
-            hardware.onControlAcquired(() => {
-                this.log('DialController: onControlAcquired');
-            });
-            hardware.onControlLost(() => {
-                this.log('DialController: onControlLost');
-            });
+            this.wireHardware(hardware);
         } else {
             this.log('DialController: no native hardware available');
         }
@@ -233,9 +214,41 @@ export class DialController implements vscode.Disposable {
         }
     }
 
+    connectHardware(hw: DialHardwareEvents): void {
+        if (this.hardware) {
+            this.hardware.dispose();
+        }
+        this.hardware = hw;
+        this.wireHardware(hw);
+        this.log('DialController: hardware connected');
+    }
+
     dispose(): void {
         this.hardware?.dispose();
         this.statusBar.dispose();
         this.disposables.forEach(d => d.dispose());
+    }
+
+    private wireHardware(hw: DialHardwareEvents): void {
+        this.log('DialController: wiring hardware event handlers');
+        hw.onRotate(delta => {
+            this.log(`DialController: onRotate ${delta}`);
+            if (delta < 0) { this.rotateLeft(); } else { this.rotateRight(); }
+        });
+        hw.onButtonClick(() => {
+            this.log('DialController: onButtonClick');
+            this.click();
+        });
+        hw.onMenuItemSelected(name => {
+            this.log(`DialController: onMenuItemSelected ${name}`);
+            this.setModeByName(name);
+        });
+        hw.onControlAcquired(() => {
+            this.log('DialController: onControlAcquired');
+        });
+        hw.onControlLost(() => {
+            this.log('DialController: onControlLost');
+        });
+        this.syncHardwareMenu();
     }
 }

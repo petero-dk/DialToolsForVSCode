@@ -267,42 +267,67 @@ static void WinRTThread(HWND rendererHwnd) {
     winrt::event_token acquiredToken{};
     winrt::event_token lostToken{};
 
-    // Create RadialController for the renderer window
-    try {
-        auto controllerInterop =
-            winrt::get_activation_factory<RadialController,
-                                          IRadialControllerInterop>();
-        winrt::check_hresult(
-            controllerInterop->CreateForWindow(
-                rendererHwnd,
-                winrt::guid_of<RadialController>(),
-                winrt::put_abi(controller)));
+    // Create RadialController for the renderer window.
+    // Retry up to 6 times (3 s total) to handle the race where a previous
+    // session's controller hasn't fully released from WinRT yet.
+    {
+        const int maxAttempts = 6;
+        bool initOk = false;
+        for (int attempt = 0; attempt < maxAttempts && !g_shouldStop; ++attempt) {
+            try {
+                auto controllerInterop =
+                    winrt::get_activation_factory<RadialController,
+                                                  IRadialControllerInterop>();
+                winrt::check_hresult(
+                    controllerInterop->CreateForWindow(
+                        rendererHwnd,
+                        winrt::guid_of<RadialController>(),
+                        winrt::put_abi(controller)));
 
-        auto configInterop =
-            winrt::get_activation_factory<RadialControllerConfiguration,
-                                          IRadialControllerConfigurationInterop>();
-        winrt::check_hresult(
-            configInterop->GetForWindow(
-                rendererHwnd,
-                winrt::guid_of<RadialControllerConfiguration>(),
-                winrt::put_abi(config)));
+                auto configInterop =
+                    winrt::get_activation_factory<RadialControllerConfiguration,
+                                                  IRadialControllerConfigurationInterop>();
+                winrt::check_hresult(
+                    configInterop->GetForWindow(
+                        rendererHwnd,
+                        winrt::guid_of<RadialControllerConfiguration>(),
+                        winrt::put_abi(config)));
 
-        config.SetDefaultMenuItems(
-            winrt::single_threaded_vector<RadialControllerSystemMenuItemKind>());
-        SendDebug("hook: RadialController created, system menu items cleared");
-    } catch (const winrt::hresult_error& e) {
-        std::ostringstream ss;
-        ss << "hook: RadialController init failed HRESULT=0x"
-           << std::hex << static_cast<unsigned long>(e.code());
-        SendDebug(ss.str());
-        winrt::uninit_apartment();
-        CoUninitialize();
-        return;
-    } catch (...) {
-        SendDebug("hook: RadialController init failed (unknown exception)");
-        winrt::uninit_apartment();
-        CoUninitialize();
-        return;
+                config.SetDefaultMenuItems(
+                    winrt::single_threaded_vector<RadialControllerSystemMenuItemKind>());
+                SendDebug("hook: RadialController created, system menu items cleared");
+                initOk = true;
+                break;
+            } catch (const winrt::hresult_error& e) {
+                controller = nullptr;
+                config = nullptr;
+                std::ostringstream ss;
+                ss << "hook: RadialController init HRESULT=0x"
+                   << std::hex << static_cast<unsigned long>(e.code());
+                if (attempt < maxAttempts - 1 && !g_shouldStop) {
+                    ss << " (attempt " << attempt + 1 << "/" << maxAttempts << ", retrying)";
+                    SendDebug(ss.str());
+                    Sleep(500);
+                } else {
+                    SendDebug(ss.str());
+                }
+            } catch (...) {
+                controller = nullptr;
+                config = nullptr;
+                if (attempt < maxAttempts - 1 && !g_shouldStop) {
+                    SendDebug("hook: RadialController init failed, retrying (attempt "
+                        + std::to_string(attempt + 1) + "/" + std::to_string(maxAttempts) + ")");
+                    Sleep(500);
+                } else {
+                    SendDebug("hook: RadialController init failed (unknown exception)");
+                }
+            }
+        }
+        if (!initOk) {
+            winrt::uninit_apartment();
+            CoUninitialize();
+            return;
+        }
     }
 
     // Helper: send a named pipe event with a string payload
@@ -362,6 +387,16 @@ static void WinRTThread(HWND rendererHwnd) {
                         controller.Menu().SelectMenuItem(item);
                     } catch (...) {
                         SendDebug("hook: failed to select first menu item");
+                    }
+                    // Suppress system default items (Volume, Scroll, Zoom, Undo, Custom tool)
+                    // now that we have at least one custom item. Calling this with an empty
+                    // menu has no effect on some Windows versions, so we defer until here.
+                    try {
+                        config.SetDefaultMenuItems(
+                            winrt::single_threaded_vector<RadialControllerSystemMenuItemKind>());
+                        SendDebug("hook: system default menu items suppressed");
+                    } catch (...) {
+                        SendDebug("hook: SetDefaultMenuItems failed");
                     }
                 }
                 std::string nm(wname.begin(), wname.end());
@@ -437,6 +472,10 @@ static void WinRTThread(HWND rendererHwnd) {
         // Remove remaining menu items
         doClearMenuItems();
         controller = nullptr;
+    }
+    // Restore system defaults so the Dial remains useful after unload
+    if (config) {
+        try { config.ResetToDefaultMenuItems(); } catch (...) {}
     }
     config = nullptr;
 

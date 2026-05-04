@@ -108,14 +108,20 @@ static HWND FindVSCodeWindow() {
 
     const DWORD myPid = GetCurrentProcessId();
 
-    // Collect Code.exe ancestors (up to 3 levels up).
+    // Walk up the process tree and stop at the *first* VS Code ancestor.
+    // Limiting to one Code.exe prevents accidentally including a parent
+    // development VS Code instance (which would inject the hook into the
+    // wrong renderer and hold the DLL locked after the debug instance closes).
     std::set<DWORD> ancestorPids;
     DWORD cur = myPid;
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < 10; ++i) {
         auto it = parentOf.find(cur);
         if (it == parentOf.end() || it->second == 0) break;
         cur = it->second;
-        if (IsVSCodeLikeExe(exeOf[cur])) ancestorPids.insert(cur);
+        if (IsVSCodeLikeExe(exeOf[cur])) {
+            ancestorPids.insert(cur);
+            break;  // stop here — don't climb into a parent VS Code instance
+        }
     }
 
     // Also include Code.exe children of those ancestors (renderer siblings).
@@ -388,15 +394,16 @@ private:
         // 10. Post a dummy message to the renderer thread to trigger the hook
         PostThreadMessageW(rendererThreadId, WM_NULL, 0, 0);
 
-        // 11. Wait for EvtReady (up to 5 s)
-        DWORD waitResult = WaitForSingleObject(readyEvent_, 5000);
+        // 11. Wait for EvtReady (up to 10 s; DLL may retry WinRT init several times)
+        // EvtShutdownComplete also signals readyEvent_ so we fail fast without
+        // sitting out the full timeout if WinRT init is permanently broken.
+        DWORD waitResult = WaitForSingleObject(readyEvent_, 10000);
         if (waitResult != WAIT_OBJECT_0) {
             DebugLog("initialize(): timed out waiting for EvtReady");
-            // Cleanup will be done in Dispose/destructor
-            initOk_ = false;
+        } else if (!initOk_) {
+            DebugLog("initialize(): DLL reported init failure");
         } else {
             DebugLog("initialize(): EvtReady received, init complete");
-            initOk_ = true;
         }
 
         CloseHandle(readyEvent_);
@@ -560,6 +567,7 @@ private:
         switch (type) {
         case Msg::EvtReady:
             DebugLog("event: EvtReady");
+            initOk_ = true;
             if (readyEvent_) SetEvent(readyEvent_);
             break;
 
@@ -617,7 +625,8 @@ private:
 
         case Msg::EvtShutdownComplete:
             DebugLog("event: ShutdownComplete");
-            pipeStop_ = true; // exit the read loop; DLL will close its pipe next
+            pipeStop_ = true;
+            if (readyEvent_) SetEvent(readyEvent_);  // unblock initialize() fast on early DLL failure
             break;
 
         case Msg::EvtDebug:
