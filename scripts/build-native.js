@@ -2,6 +2,8 @@
 // Command Prompt, which is required on Windows for MSVC to be on PATH.
 // Spawns cmd.exe with START /WAIT so it escapes any Job Object restrictions
 // imposed by the parent process (e.g. VS Code terminal).
+//
+// Set TARGET_ARCH env var to 'arm64' for cross-compilation from an x64 host.
 
 const { execFileSync, spawnSync } = require('child_process');
 const path = require('path');
@@ -13,8 +15,10 @@ if (process.platform !== 'win32') {
     process.exit(0);
 }
 
-const rebuild = process.argv[2] === 'rebuild';
-const action  = rebuild ? 'rebuild' : 'configure build';
+const rebuild    = process.argv[2] === 'rebuild';
+const targetArch = process.env.TARGET_ARCH || 'x64';
+const archArg    = `--arch=${targetArch}`;
+const action     = rebuild ? `rebuild ${archArg}` : `configure ${archArg} build`;
 
 // Locate VsDevCmd.bat via vswhere
 function findVsDevCmd() {
@@ -37,7 +41,7 @@ let batContent;
 if (vsDevCmd) {
     batContent = [
         `@echo off`,
-        `call "${vsDevCmd}" -arch=x64 -host_arch=x64`,
+        `call "${vsDevCmd}" -arch=${targetArch} -host_arch=x64`,
         `cd /d "${nativeDir}"`,
         `node "${nodeGyp}" ${action}`,
     ].join('\r\n');

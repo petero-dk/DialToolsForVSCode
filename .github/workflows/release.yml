@@ -1,0 +1,57 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        arch: [x64, arm64]
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Compile TypeScript
+        run: npm run compile
+
+      - name: Build native addon (${{ matrix.arch }})
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: npm run build-native
+
+      - name: Package extension (win32-${{ matrix.arch }})
+        run: npx @vscode/vsce package --target win32-${{ matrix.arch }} --no-dependencies
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsix-win32-${{ matrix.arch }}
+          path: '*.vsix'
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: '**/*.vsix'
+          generate_release_notes: true
