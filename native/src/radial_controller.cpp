@@ -237,6 +237,7 @@ private:
     // -----------------------------------------------------------------------
     HMODULE hDll_{ nullptr };
     HHOOK   hook_{ nullptr };
+    std::wstring tempDllPath_; // session-unique copy; never locks the build output
 
     // -----------------------------------------------------------------------
     // Pipe reader thread
@@ -276,10 +277,21 @@ private:
             return env.Undefined();
         }
 
-        // 1. Find VS Code renderer window
-        HWND rendererHwnd = FindVSCodeWindow();
+        // 1. Find VS Code renderer window.
+        // Retry up to 5 times (2 s total): on a warm second debug session VS Code
+        // activates extensions before the renderer window is fully visible.
+        HWND rendererHwnd = nullptr;
+        for (int attempt = 0; attempt < 5 && !rendererHwnd; ++attempt) {
+            rendererHwnd = FindVSCodeWindow();
+            if (!rendererHwnd) {
+                DebugLog("initialize(): renderer HWND not found"
+                    + (attempt < 4
+                        ? ", retrying (attempt " + std::to_string(attempt + 1) + "/5)"
+                        : " (giving up)"));
+                if (attempt < 4) Sleep(400);
+            }
+        }
         if (!rendererHwnd) {
-            DebugLog("initialize(): renderer HWND not found");
             return Napi::Boolean::New(env, false);
         }
 
@@ -350,8 +362,26 @@ private:
             DebugLog("initialize(): loading DLL: " + dp);
         }
 
-        // 6. Load the DLL (this registers it; hook will inject it into renderer)
-        hDll_ = LoadLibraryW(dllPath.c_str());
+        // 6. Copy the DLL to a session-unique temp path before loading.
+        // This ensures the build output (dllPath) is never file-locked, so
+        // the developer can rebuild at any time without closing VS Code.
+        {
+            wchar_t tempDir[MAX_PATH]{};
+            GetTempPathW(MAX_PATH, tempDir);
+            tempDllPath_ = std::wstring(tempDir) + L"radial_hook_"
+                + std::to_wstring(GetCurrentProcessId()) + L".dll";
+            if (CopyFileW(dllPath.c_str(), tempDllPath_.c_str(), FALSE)) {
+                std::string tp(tempDllPath_.begin(), tempDllPath_.end());
+                DebugLog("initialize(): DLL temp copy: " + tp);
+            } else {
+                DebugLog("initialize(): CopyFile failed, loading original (build lock risk)");
+                tempDllPath_.clear();
+            }
+        }
+        const std::wstring& loadPath = tempDllPath_.empty() ? dllPath : tempDllPath_;
+
+        // 6b. Load the DLL (this registers it; hook will inject it into renderer)
+        hDll_ = LoadLibraryW(loadPath.c_str());
         if (!hDll_) {
             std::ostringstream ss;
             ss << "initialize(): LoadLibrary failed, error=" << GetLastError();
@@ -364,11 +394,19 @@ private:
         // 7. Get hook proc and install
         HOOKPROC hookProc = reinterpret_cast<HOOKPROC>(
             GetProcAddress(hDll_, "GetMsgProc"));
-        if (!hookProc) {
-            DebugLog("initialize(): GetProcAddress(GetMsgProc) failed");
+        auto earlyFail = [&]() {
             FreeLibrary(hDll_); hDll_ = nullptr;
+            if (!tempDllPath_.empty()) {
+                DeleteFileW(tempDllPath_.c_str());
+                tempDllPath_.clear();
+            }
             CloseHandle(evtPipeServer_); evtPipeServer_ = INVALID_HANDLE_VALUE;
             CloseHandle(cmdPipeServer_); cmdPipeServer_ = INVALID_HANDLE_VALUE;
+        };
+
+        if (!hookProc) {
+            DebugLog("initialize(): GetProcAddress(GetMsgProc) failed");
+            earlyFail();
             return Napi::Boolean::New(env, false);
         }
 
@@ -377,9 +415,7 @@ private:
             std::ostringstream ss;
             ss << "initialize(): SetWindowsHookEx failed, error=" << GetLastError();
             DebugLog(ss.str());
-            FreeLibrary(hDll_); hDll_ = nullptr;
-            CloseHandle(evtPipeServer_); evtPipeServer_ = INVALID_HANDLE_VALUE;
-            CloseHandle(cmdPipeServer_); cmdPipeServer_ = INVALID_HANDLE_VALUE;
+            earlyFail();
             return Napi::Boolean::New(env, false);
         }
         DebugLog("initialize(): hook installed");
@@ -703,8 +739,28 @@ private:
         }
 
         if (hDll_) {
+            DebugLog("cleanup(): FreeLibrary(hDll_) — releasing DLL from extension host (PID "
+                + std::to_string(GetCurrentProcessId()) + ")");
             FreeLibrary(hDll_);
             hDll_ = nullptr;
+            DebugLog("cleanup(): FreeLibrary done");
+        }
+
+        // Delete the session temp copy. By this point Cleanup() has already
+        // received EvtShutdownComplete (meaning the DLL called
+        // FreeLibraryAndExitThread in the renderer), so both refcounts are gone.
+        if (!tempDllPath_.empty()) {
+            std::string tp(tempDllPath_.begin(), tempDllPath_.end());
+            DebugLog("cleanup(): deleting temp DLL: " + tp);
+            if (DeleteFileW(tempDllPath_.c_str())) {
+                DebugLog("cleanup(): temp DLL deleted");
+            } else {
+                DWORD err = GetLastError();
+                DebugLog("cleanup(): DeleteFile failed (error=" + std::to_string(err)
+                    + "), scheduling delete on reboot");
+                MoveFileExW(tempDllPath_.c_str(), nullptr, MOVEFILE_DELAY_UNTIL_REBOOT);
+            }
+            tempDllPath_.clear();
         }
 
         initOk_       = false;

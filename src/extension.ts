@@ -91,8 +91,10 @@ export function activate(context: vscode.ExtensionContext): void {
 // called) before VS Code proceeds with upgrade/reload/disable.
 export function deactivate(): Promise<void> {
     return new Promise<void>(resolve => {
+        console.log('[DialTools] deactivate: disposing controller');
         activeController?.dispose();
         activeController = undefined;
+        console.log('[DialTools] deactivate: done');
         resolve();
     });
 }

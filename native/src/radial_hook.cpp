@@ -253,6 +253,23 @@ static void WinRTThread(HWND rendererHwnd) {
 
     SendDebug("hook: WinRTThread started, creating RadialController");
 
+    // Named mutex that serializes RadialController lifetime within this renderer
+    // process. The previous DLL instance holds it while a controller is alive and
+    // releases it right after controller = nullptr, so we never race on CreateForWindow.
+    std::wstring mutexName =
+        L"Local\\DialToolsRC-" + std::to_wstring(GetCurrentProcessId());
+    HANDLE instanceMutex = CreateMutexW(nullptr, FALSE, mutexName.c_str());
+    if (instanceMutex) {
+        DWORD wr = WaitForSingleObject(instanceMutex, 8000);
+        if (wr == WAIT_OBJECT_0 || wr == WAIT_ABANDONED) {
+            SendDebug("hook: acquired instance mutex");
+        } else {
+            SendDebug("hook: timed out waiting for instance mutex — proceeding anyway");
+            CloseHandle(instanceMutex);
+            instanceMutex = nullptr;
+        }
+    }
+
     RadialController            controller{ nullptr };
     RadialControllerConfiguration config{ nullptr };
 
@@ -324,6 +341,10 @@ static void WinRTThread(HWND rendererHwnd) {
             }
         }
         if (!initOk) {
+            if (instanceMutex) {
+                ReleaseMutex(instanceMutex);
+                CloseHandle(instanceMutex);
+            }
             winrt::uninit_apartment();
             CoUninitialize();
             return;
@@ -473,6 +494,14 @@ static void WinRTThread(HWND rendererHwnd) {
         doClearMenuItems();
         controller = nullptr;
     }
+    // Release mutex now: controller is gone so a new session can safely call
+    // CreateForWindow. This happens before ResetToDefaultMenuItems which may block.
+    if (instanceMutex) {
+        ReleaseMutex(instanceMutex);
+        CloseHandle(instanceMutex);
+        instanceMutex = nullptr;
+        SendDebug("hook: released instance mutex");
+    }
     // Restore system defaults so the Dial remains useful after unload
     if (config) {
         try { config.ResetToDefaultMenuItems(); } catch (...) {}
@@ -569,6 +598,13 @@ static void InitDll() {
     // Release the extra refcount we took in GetMsgProc and exit this thread atomically.
     // FreeLibraryAndExitThread is the safe way to self-unload from a thread: it
     // prevents a "return into unmapped code" crash if our refcount was the last one.
+    {
+        wchar_t modPath[MAX_PATH]{};
+        GetModuleFileNameW(g_hModule, modPath, MAX_PATH);
+        std::wstring msg = L"[DialTools hook] FreeLibraryAndExitThread — unloading DLL from renderer PID "
+            + std::to_wstring(GetCurrentProcessId()) + L": " + modPath + L"\n";
+        OutputDebugStringW(msg.c_str());
+    }
     FreeLibraryAndExitThread(g_hModule, 0);
     // unreachable
 }
