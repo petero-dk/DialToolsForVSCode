@@ -1,10 +1,11 @@
 src/
 native/src/
-native/build/obj.target/
-native/build/Debug/
+native/build/
 node_modules/
 .vscode-test/
 *.vsix
 tsconfig.json
 .eslintrc*
 .gitignore
+!native/build/Release/radial_controller.node
+!native/build/Release/radial_hook.dll

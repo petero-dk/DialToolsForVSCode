@@ -56,7 +56,7 @@ if (vsDevCmd) {
 const batFile = path.join(os.tmpdir(), 'dial-tools-build.bat');
 fs.writeFileSync(batFile, batContent, 'ascii');
 
-const psCmd = `Start-Process -FilePath cmd.exe -ArgumentList '/c "${batFile}" > "${logFile}" 2>&1' -Wait -NoNewWindow`;
+const psCmd = `$p = Start-Process -FilePath cmd.exe -ArgumentList '/c "${batFile}" > "${logFile}" 2>&1' -Wait -NoNewWindow -PassThru; exit $p.ExitCode`;
 const result = spawnSync('powershell.exe',
     ['-NonInteractive', '-Command', psCmd],
     { stdio: 'inherit', shell: false });
@@ -66,4 +66,10 @@ console.log(log);
 
 if (result.status !== 0) {
     process.exit(result.status ?? 1);
+}
+
+const nodePath = path.join(nativeDir, 'build', 'Release', 'radial_controller.node');
+if (!fs.existsSync(nodePath)) {
+    console.error('Build completed but radial_controller.node was not produced.');
+    process.exit(1);
 }
