@@ -1,8 +1,13 @@
 src/
 native/src/
+native/binding.gyp
 native/build/
 node_modules/
 .vscode-test/
+.vscode/
+.claude/
+.github/
+scripts/
 *.vsix
 tsconfig.json
 .eslintrc*

@@ -16,7 +16,8 @@ if (process.platform !== 'win32') {
 }
 
 const rebuild    = process.argv[2] === 'rebuild';
-const targetArch = process.env.TARGET_ARCH || 'x64';
+const targetArch = process.env.TARGET_ARCH || process.arch;
+const hostArch   = process.arch === 'arm64' ? 'arm64' : 'x64';
 const archArg    = `--arch=${targetArch}`;
 const action     = rebuild ? `rebuild ${archArg}` : `configure ${archArg} build`;
 
@@ -38,25 +39,27 @@ const nativeDir = path.join(__dirname, '..', 'native');
 const logFile   = path.join(os.tmpdir(), 'dial-tools-native-build.log');
 
 let batContent;
+const gypLine = `node "${nodeGyp}" ${action} > "${logFile}" 2>&1`;
+
 if (vsDevCmd) {
     batContent = [
         `@echo off`,
-        `call "${vsDevCmd}" -arch=${targetArch} -host_arch=x64`,
+        `call "${vsDevCmd}" -arch=${targetArch} -host_arch=${hostArch}`,
         `cd /d "${nativeDir}"`,
-        `node "${nodeGyp}" ${action}`,
+        gypLine,
     ].join('\r\n');
 } else {
     batContent = [
         `@echo off`,
         `cd /d "${nativeDir}"`,
-        `node "${nodeGyp}" ${action}`,
+        gypLine,
     ].join('\r\n');
 }
 
 const batFile = path.join(os.tmpdir(), 'dial-tools-build.bat');
 fs.writeFileSync(batFile, batContent, 'ascii');
 
-const psCmd = `$p = Start-Process -FilePath cmd.exe -ArgumentList '/c "${batFile}" > "${logFile}" 2>&1' -Wait -NoNewWindow -PassThru; exit $p.ExitCode`;
+const psCmd = `$p = Start-Process -FilePath cmd.exe -ArgumentList '/c "${batFile}"' -Wait -NoNewWindow -PassThru; exit $p.ExitCode`;
 const result = spawnSync('powershell.exe',
     ['-NonInteractive', '-Command', psCmd],
     { stdio: 'inherit', shell: false });
