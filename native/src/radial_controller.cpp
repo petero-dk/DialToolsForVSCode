@@ -1,53 +1,79 @@
-// Native Node.js addon — manages radial_hook.dll injection and named pipe IPC.
+// Native Node.js addon wrapping Windows.UI.Input.RadialController (WinRT).
 //
-// Architecture:
-//   radial_hook.dll  — injected into VS Code's renderer process via SetWindowsHookEx;
-//                      creates the RadialController in the correct process context.
-//   radial_controller.node — this addon, running in the extension host; creates
-//                      named pipe servers, loads and hooks the DLL, and dispatches
-//                      WinRT events to JS via Napi::ThreadSafeFunction.
+// The RadialController only shows custom menu items when the process that owns
+// the HWND passed to CreateForWindow is in the foreground. VS Code's extension
+// host is a separate process from the renderer (which owns the visible window),
+// so we must find VS Code's renderer window and use its HWND. A hidden message-
+// only window is still created on our STA thread to run the message pump that
+// delivers WinRT events — but CreateForWindow receives the renderer's HWND.
 //
-// Named pipe protocol (pipe_protocol.h):
-//   Events  pipe  \\.\pipe\DialToolsRC-evt-{rendererPid}  DLL writes, addon reads
-//   Commands pipe \\.\pipe\DialToolsRC-cmd-{rendererPid}  addon writes, DLL reads
-//   Frames: [4-byte Msg type][4-byte dataLen][dataLen bytes]
+// All WinRT work runs on a dedicated STA thread; JS callbacks are marshalled
+// back via Napi::ThreadSafeFunction.
 
 #include <napi.h>
 #include <windows.h>
 #include <ole2.h>
-#include <tlhelp32.h>
 
+// C++/WinRT
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.UI.Input.h>
+#include <winrt/Windows.Storage.Streams.h>
+
+// Win32 interop headers — RadialControllerInterop.h also defines
+// IRadialControllerConfigurationInterop in SDK 10.0.26100+
+#include <RadialControllerInterop.h>
+
+#include <tlhelp32.h>
 #include <thread>
 #include <mutex>
 #include <atomic>
 #include <condition_variable>
-#include <string>
 #include <map>
 #include <set>
-#include <sstream>
-#include <cwctype>
+#include <string>
 #include <functional>
 #include <memory>
 
-#include "pipe_protocol.h"
+#include <sstream>
+#include <cwctype>
 
+#pragma comment(lib, "RuntimeObject.lib")
+#pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "user32.lib")
 
-using namespace DialTools;
-
-// Forward declaration — used as address hint for GetModuleHandleExW
-Napi::Object ModuleInit(Napi::Env env, Napi::Object exports);
-
-// ---------------------------------------------------------------------------
-// Helper: map string icon name → UTF-8 icon name (passed through pipe as-is)
-// (Icon mapping lives in the DLL; we only need the string here.)
-// ---------------------------------------------------------------------------
+using namespace winrt::Windows::UI::Input;
+using namespace winrt::Windows::Foundation;
+using namespace winrt::Windows::Foundation::Collections;
 
 // ---------------------------------------------------------------------------
-// Window-finding helpers — identical to previous version; kept unchanged
+// Window class name for the hidden message-only window
+// ---------------------------------------------------------------------------
+static constexpr wchar_t kWndClass[] = L"DialToolsMessageWnd";
+
+// ---------------------------------------------------------------------------
+// Helper: map string icon name → RadialControllerMenuKnownIcon
+// ---------------------------------------------------------------------------
+static RadialControllerMenuKnownIcon IconFromString(const std::string& name) {
+    if (name == "zoom")              return RadialControllerMenuKnownIcon::Zoom;
+    if (name == "undoRedo")          return RadialControllerMenuKnownIcon::UndoRedo;
+    if (name == "volume")            return RadialControllerMenuKnownIcon::Volume;
+    if (name == "nextPreviousTrack") return RadialControllerMenuKnownIcon::NextPreviousTrack;
+    if (name == "ruler")             return RadialControllerMenuKnownIcon::Ruler;
+    if (name == "inkColor")          return RadialControllerMenuKnownIcon::InkColor;
+    if (name == "inkThickness")      return RadialControllerMenuKnownIcon::InkThickness;
+    if (name == "penType")           return RadialControllerMenuKnownIcon::PenType;
+    return RadialControllerMenuKnownIcon::Scroll; // default
+}
+
+// ---------------------------------------------------------------------------
+// Find a top-level VS Code renderer/main HWND by matching Chromium window class
+// plus Code*.exe process image. Falls back to nullptr if nothing is found.
 // ---------------------------------------------------------------------------
 static std::wstring ToLower(std::wstring s) {
-    for (auto& ch : s) ch = static_cast<wchar_t>(std::towlower(ch));
+    for (auto& ch : s) {
+        ch = static_cast<wchar_t>(std::towlower(ch));
+    }
     return s;
 }
 
@@ -57,6 +83,7 @@ static std::wstring BasenameOfPath(const std::wstring& fullPath) {
 }
 
 static bool IsVSCodeLikeExe(const std::wstring& exeNameLower) {
+    // Match common channels: Code.exe, Code - Insiders.exe, Code - OSS.exe
     if (exeNameLower == L"code.exe") return true;
     if (exeNameLower.find(L"code - ") == 0 &&
         exeNameLower.size() > 10 &&
@@ -69,11 +96,13 @@ static bool IsVSCodeLikeExe(const std::wstring& exeNameLower) {
 static std::wstring GetProcessExeName(DWORD pid) {
     HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
     if (!process) return L"";
+
     wchar_t pathBuf[MAX_PATH]{};
     DWORD size = MAX_PATH;
     std::wstring result;
-    if (QueryFullProcessImageNameW(process, 0, pathBuf, &size))
+    if (QueryFullProcessImageNameW(process, 0, pathBuf, &size)) {
         result = BasenameOfPath(ToLower(pathBuf));
+    }
     CloseHandle(process);
     return result;
 }
@@ -81,22 +110,33 @@ static std::wstring GetProcessExeName(DWORD pid) {
 static bool IsVSCodeTopLevelWindow(HWND hwnd) {
     if (!hwnd || !IsWindow(hwnd) || !IsWindowVisible(hwnd)) return false;
     if (GetWindow(hwnd, GW_OWNER) != nullptr) return false;
+
     wchar_t cls[64]{};
     GetClassNameW(hwnd, cls, 64);
     if (wcsncmp(cls, L"Chrome_WidgetWin_", 17) != 0) return false;
+
     DWORD pid = 0;
     GetWindowThreadProcessId(hwnd, &pid);
     if (pid == 0) return false;
+
     const std::wstring exe = GetProcessExeName(pid);
     return IsVSCodeLikeExe(exe);
 }
 
 static HWND FindVSCodeWindow() {
+    // VS Code's extension host can be either:
+    //   (a) a direct child of the renderer process, OR
+    //   (b) a sibling of the renderer (both children of the main process).
+    //
+    // Strategy: snapshot all processes, walk up 2-3 levels from our PID
+    // collecting Code.exe ancestors, then also include their Code.exe children.
+    // Search for a Chrome_WidgetWin_* window owned by any of those PIDs.
+
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snap == INVALID_HANDLE_VALUE) return nullptr;
 
     std::map<DWORD, DWORD>        parentOf;
-    std::map<DWORD, std::wstring> exeOf;
+    std::map<DWORD, std::wstring> exeOf;   // base exe name, lower-case
     PROCESSENTRY32W pe{ sizeof(pe) };
     if (Process32FirstW(snap, &pe)) {
         do {
@@ -108,32 +148,28 @@ static HWND FindVSCodeWindow() {
 
     const DWORD myPid = GetCurrentProcessId();
 
-    // Walk up the process tree and stop at the *first* VS Code ancestor.
-    // Limiting to one Code.exe prevents accidentally including a parent
-    // development VS Code instance (which would inject the hook into the
-    // wrong renderer and hold the DLL locked after the debug instance closes).
+    // Collect Code.exe ancestors (up to 3 levels up).
     std::set<DWORD> ancestorPids;
     DWORD cur = myPid;
-    for (int i = 0; i < 10; ++i) {
+    for (int i = 0; i < 3; ++i) {
         auto it = parentOf.find(cur);
         if (it == parentOf.end() || it->second == 0) break;
         cur = it->second;
-        if (IsVSCodeLikeExe(exeOf[cur])) {
-            ancestorPids.insert(cur);
-            break;  // stop here — don't climb into a parent VS Code instance
-        }
+        if (IsVSCodeLikeExe(exeOf[cur])) ancestorPids.insert(cur);
     }
 
     // Also include Code.exe children of those ancestors (renderer siblings).
     std::set<DWORD> searchPids = ancestorPids;
     for (auto& [childPid, parentPid] : parentOf) {
-        if (ancestorPids.count(parentPid) && IsVSCodeLikeExe(exeOf[childPid]))
+        if (ancestorPids.count(parentPid) && IsVSCodeLikeExe(exeOf[childPid])) {
             searchPids.insert(childPid);
+        }
     }
 
     if (searchPids.empty()) return nullptr;
 
-    // First choice: foreground window if it belongs to our process set.
+    // First choice: current foreground window if it belongs to our process set
+    // and is a Chromium top-level VS Code window.
     HWND fg = GetForegroundWindow();
     if (fg && IsWindowVisible(fg) && GetWindow(fg, GW_OWNER) == nullptr) {
         wchar_t cls[64]{};
@@ -141,7 +177,9 @@ static HWND FindVSCodeWindow() {
         if (wcsncmp(cls, L"Chrome_WidgetWin_", 17) == 0) {
             DWORD fgPid = 0;
             GetWindowThreadProcessId(fg, &fgPid);
-            if (searchPids.count(fgPid)) return fg;
+            if (searchPids.count(fgPid)) {
+                return fg;
+            }
         }
     }
 
@@ -157,38 +195,25 @@ static HWND FindVSCodeWindow() {
         auto& c = *reinterpret_cast<Ctx*>(lp);
         if (!IsWindowVisible(hwnd)) return TRUE;
         if (GetWindow(hwnd, GW_OWNER) != nullptr) return TRUE;
+
         wchar_t cls[64]{};
         GetClassNameW(hwnd, cls, 64);
         if (wcsncmp(cls, L"Chrome_WidgetWin_", 17) != 0) return TRUE;
+
         DWORD pid = 0;
         GetWindowThreadProcessId(hwnd, &pid);
         if (!c.searchPids.count(pid)) return TRUE;
+
         wchar_t title[256]{};
         int len = GetWindowTextW(hwnd, title, static_cast<int>(std::size(title)));
-        c.found    = hwnd;
-        c.foundPid = pid;
+        c.found      = hwnd;
+        c.foundPid   = pid;
         c.foundTitle = title;
-        if (len > 0) return FALSE; // prefer titled windows
+        if (len > 0) return FALSE; // prefer titled windows; stop on first
         return TRUE;
     }, reinterpret_cast<LPARAM>(&ctx));
 
     return ctx.found;
-}
-
-// ---------------------------------------------------------------------------
-// Pipe write helper
-// ---------------------------------------------------------------------------
-static bool WriteExact(HANDLE pipe, const void* buf, DWORD len) {
-    const char* p   = static_cast<const char*>(buf);
-    DWORD       rem = len;
-    while (rem > 0) {
-        DWORD written = 0;
-        if (!WriteFile(pipe, p, rem, &written, nullptr) || written == 0)
-            return false;
-        p   += written;
-        rem -= written;
-    }
-    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -198,17 +223,17 @@ class RadialControllerAddon : public Napi::ObjectWrap<RadialControllerAddon> {
 public:
     static Napi::Object Init(Napi::Env env, Napi::Object exports) {
         Napi::Function func = DefineClass(env, "RadialController", {
-            InstanceMethod("initialize",        &RadialControllerAddon::Initialize),
-            InstanceMethod("addMenuItem",       &RadialControllerAddon::AddMenuItem),
-            InstanceMethod("removeMenuItem",    &RadialControllerAddon::RemoveMenuItem),
-            InstanceMethod("clearMenuItems",    &RadialControllerAddon::ClearMenuItems),
-            InstanceMethod("onDebug",           &RadialControllerAddon::OnDebug),
-            InstanceMethod("onRotate",          &RadialControllerAddon::OnRotate),
-            InstanceMethod("onClick",           &RadialControllerAddon::OnClick),
+            InstanceMethod("initialize",       &RadialControllerAddon::Initialize),
+            InstanceMethod("addMenuItem",      &RadialControllerAddon::AddMenuItem),
+            InstanceMethod("removeMenuItem",   &RadialControllerAddon::RemoveMenuItem),
+            InstanceMethod("clearMenuItems",   &RadialControllerAddon::ClearMenuItems),
+            InstanceMethod("onDebug",          &RadialControllerAddon::OnDebug),
+            InstanceMethod("onRotate",         &RadialControllerAddon::OnRotate),
+            InstanceMethod("onClick",          &RadialControllerAddon::OnClick),
             InstanceMethod("onMenuItemSelected",&RadialControllerAddon::OnMenuItemSelected),
-            InstanceMethod("onControlAcquired", &RadialControllerAddon::OnControlAcquired),
-            InstanceMethod("onControlLost",     &RadialControllerAddon::OnControlLost),
-            InstanceMethod("dispose",           &RadialControllerAddon::Dispose),
+            InstanceMethod("onControlAcquired",&RadialControllerAddon::OnControlAcquired),
+            InstanceMethod("onControlLost",    &RadialControllerAddon::OnControlLost),
+            InstanceMethod("dispose",          &RadialControllerAddon::Dispose),
         });
 
         auto* ctor = new Napi::FunctionReference();
@@ -225,44 +250,43 @@ public:
 
 private:
     // -----------------------------------------------------------------------
-    // Pipe handles
+    // State shared between JS thread and WinRT thread
     // -----------------------------------------------------------------------
-    HANDLE evtPipeServer_{ INVALID_HANDLE_VALUE }; // addon reads events from DLL
-    HANDLE cmdPipeServer_{ INVALID_HANDLE_VALUE }; // addon writes commands to DLL
+    std::thread           winrtThread_;
+    DWORD                 winrtThreadId_{ 0 };
+    std::atomic<bool>     shouldStop_{ false };
 
-    std::mutex cmdMutex_; // protects cmdPipeServer_ writes
+    // One-time init sync
+    std::mutex              initMutex_;
+    std::condition_variable initCv_;
+    bool                    initComplete_{ false };
+    bool                    initOk_{ false };
 
-    // -----------------------------------------------------------------------
-    // DLL / hook
-    // -----------------------------------------------------------------------
-    HMODULE hDll_{ nullptr };
-    HHOOK   hook_{ nullptr };
-    std::wstring tempDllPath_; // session-unique copy; never locks the build output
+    // WinRT objects (touch only from winrtThread_)
+    RadialController            controller_{ nullptr };
+    RadialControllerConfiguration config_{ nullptr };
+    HWND                        hwnd_{ nullptr };
 
-    // -----------------------------------------------------------------------
-    // Pipe reader thread
-    // -----------------------------------------------------------------------
-    std::thread          pipeReaderThread_;
-    std::atomic<bool>    pipeStop_{ false };
+    struct MenuItemEntry {
+        RadialControllerMenuItem item{ nullptr };
+        winrt::event_token       invokedToken{};
+    };
+    std::map<std::wstring, MenuItemEntry> menuItems_;
 
-    // Init-ready event: PipeReaderThread sets this when EvtReady arrives
-    HANDLE readyEvent_{ nullptr };
+    winrt::event_token rotationToken_{};
+    winrt::event_token clickToken_{};
+    winrt::event_token acquiredToken_{};
+    winrt::event_token lostToken_{};
 
-    // -----------------------------------------------------------------------
-    // Init state
-    // -----------------------------------------------------------------------
-    bool initOk_{ false };
-    bool tsfnsCreated_{ false };
-
-    // -----------------------------------------------------------------------
-    // Thread-safe function handles
-    // -----------------------------------------------------------------------
+    // Thread-safe function handles (valid after initialize, released in Cleanup)
     Napi::ThreadSafeFunction rotateTsfn_;
     Napi::ThreadSafeFunction clickTsfn_;
     Napi::ThreadSafeFunction menuItemSelectedTsfn_;
     Napi::ThreadSafeFunction controlAcquiredTsfn_;
     Napi::ThreadSafeFunction controlLostTsfn_;
     Napi::ThreadSafeFunction debugTsfn_;
+
+    bool tsfnsCreated_{ false };
 
     // -----------------------------------------------------------------------
     // JS-callable methods
@@ -271,179 +295,24 @@ private:
     Napi::Value Initialize(const Napi::CallbackInfo& info) {
         Napi::Env env = info.Env();
         DebugLog("initialize() called");
-
-        if (hook_) {
+        if (winrtThread_.joinable()) {
+            DebugLog("initialize() rejected: already initialized");
             Napi::TypeError::New(env, "Already initialized").ThrowAsJavaScriptException();
             return env.Undefined();
         }
 
-        // 1. Find VS Code renderer window.
-        // Retry up to 5 times (2 s total): on a warm second debug session VS Code
-        // activates extensions before the renderer window is fully visible.
-        HWND rendererHwnd = nullptr;
-        for (int attempt = 0; attempt < 5 && !rendererHwnd; ++attempt) {
-            rendererHwnd = FindVSCodeWindow();
-            if (!rendererHwnd) {
-                DebugLog("initialize(): renderer HWND not found"
-                    + (attempt < 4
-                        ? ", retrying (attempt " + std::to_string(attempt + 1) + "/5)"
-                        : " (giving up)"));
-                if (attempt < 4) Sleep(400);
-            }
+        // Spawn the WinRT STA thread
+        DebugLog("spawning WinRT thread");
+        winrtThread_ = std::thread([this]() { WinRTThreadProc(); });
+
+        // Wait for init to complete (max 5 s)
+        std::unique_lock<std::mutex> lock(initMutex_);
+        const bool done = initCv_.wait_for(lock, std::chrono::seconds(5),
+                                           [this]{ return initComplete_; });
+        if (!done) {
+            DebugLog("initialize() timed out waiting for WinRT thread (5s)");
         }
-        if (!rendererHwnd) {
-            return Napi::Boolean::New(env, false);
-        }
-
-        DWORD rendererPid      = 0;
-        DWORD rendererThreadId = GetWindowThreadProcessId(rendererHwnd, &rendererPid);
-
-        {
-            std::ostringstream ss;
-            ss << "initialize(): renderer HWND=0x" << std::hex
-               << reinterpret_cast<uintptr_t>(rendererHwnd)
-               << " PID=" << std::dec << rendererPid
-               << " TID=" << rendererThreadId;
-            DebugLog(ss.str());
-        }
-
-        // 2. Build pipe names
-        std::wstring evtPipeName =
-            L"\\\\.\\pipe\\DialToolsRC-evt-" + std::to_wstring(rendererPid);
-        std::wstring cmdPipeName =
-            L"\\\\.\\pipe\\DialToolsRC-cmd-" + std::to_wstring(rendererPid);
-
-        // 3. Create events pipe server (addon reads — PIPE_ACCESS_INBOUND)
-        evtPipeServer_ = CreateNamedPipeW(
-            evtPipeName.c_str(),
-            PIPE_ACCESS_INBOUND,
-            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-            1, 4096, 4096, 5000, nullptr);
-        if (evtPipeServer_ == INVALID_HANDLE_VALUE) {
-            DebugLog("initialize(): failed to create events pipe server");
-            return Napi::Boolean::New(env, false);
-        }
-
-        // 4. Create commands pipe server (addon writes — PIPE_ACCESS_OUTBOUND)
-        cmdPipeServer_ = CreateNamedPipeW(
-            cmdPipeName.c_str(),
-            PIPE_ACCESS_OUTBOUND,
-            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-            1, 4096, 4096, 5000, nullptr);
-        if (cmdPipeServer_ == INVALID_HANDLE_VALUE) {
-            DebugLog("initialize(): failed to create commands pipe server");
-            CloseHandle(evtPipeServer_); evtPipeServer_ = INVALID_HANDLE_VALUE;
-            return Napi::Boolean::New(env, false);
-        }
-
-        DebugLog("initialize(): pipe servers created");
-
-        // 5. Find DLL path: same directory as this .node addon
-        wchar_t selfPath[MAX_PATH]{};
-        {
-            HMODULE hSelf = nullptr;
-            // GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS finds the module containing
-            // the function pointer we pass — i.e., this .node file.
-            GetModuleHandleExW(
-                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                reinterpret_cast<LPCWSTR>(&ModuleInit),
-                &hSelf);
-            GetModuleFileNameW(hSelf, selfPath, MAX_PATH);
-        }
-        // Strip filename, append DLL name
-        std::wstring dllPath = selfPath;
-        size_t slash = dllPath.find_last_of(L"\\/");
-        if (slash != std::wstring::npos) dllPath.resize(slash + 1);
-        dllPath += L"radial_hook.dll";
-
-        {
-            std::string dp(dllPath.begin(), dllPath.end());
-            DebugLog("initialize(): loading DLL: " + dp);
-        }
-
-        // 6. Copy the DLL to a session-unique temp path before loading.
-        // This ensures the build output (dllPath) is never file-locked, so
-        // the developer can rebuild at any time without closing VS Code.
-        {
-            wchar_t tempDir[MAX_PATH]{};
-            GetTempPathW(MAX_PATH, tempDir);
-            tempDllPath_ = std::wstring(tempDir) + L"radial_hook_"
-                + std::to_wstring(GetCurrentProcessId()) + L".dll";
-            if (CopyFileW(dllPath.c_str(), tempDllPath_.c_str(), FALSE)) {
-                std::string tp(tempDllPath_.begin(), tempDllPath_.end());
-                DebugLog("initialize(): DLL temp copy: " + tp);
-            } else {
-                DebugLog("initialize(): CopyFile failed, loading original (build lock risk)");
-                tempDllPath_.clear();
-            }
-        }
-        const std::wstring& loadPath = tempDllPath_.empty() ? dllPath : tempDllPath_;
-
-        // 6b. Load the DLL (this registers it; hook will inject it into renderer)
-        hDll_ = LoadLibraryW(loadPath.c_str());
-        if (!hDll_) {
-            std::ostringstream ss;
-            ss << "initialize(): LoadLibrary failed, error=" << GetLastError();
-            DebugLog(ss.str());
-            CloseHandle(evtPipeServer_); evtPipeServer_ = INVALID_HANDLE_VALUE;
-            CloseHandle(cmdPipeServer_); cmdPipeServer_ = INVALID_HANDLE_VALUE;
-            return Napi::Boolean::New(env, false);
-        }
-
-        // 7. Get hook proc and install
-        HOOKPROC hookProc = reinterpret_cast<HOOKPROC>(
-            GetProcAddress(hDll_, "GetMsgProc"));
-        auto earlyFail = [&]() {
-            FreeLibrary(hDll_); hDll_ = nullptr;
-            if (!tempDllPath_.empty()) {
-                DeleteFileW(tempDllPath_.c_str());
-                tempDllPath_.clear();
-            }
-            CloseHandle(evtPipeServer_); evtPipeServer_ = INVALID_HANDLE_VALUE;
-            CloseHandle(cmdPipeServer_); cmdPipeServer_ = INVALID_HANDLE_VALUE;
-        };
-
-        if (!hookProc) {
-            DebugLog("initialize(): GetProcAddress(GetMsgProc) failed");
-            earlyFail();
-            return Napi::Boolean::New(env, false);
-        }
-
-        hook_ = SetWindowsHookExW(WH_GETMESSAGE, hookProc, hDll_, rendererThreadId);
-        if (!hook_) {
-            std::ostringstream ss;
-            ss << "initialize(): SetWindowsHookEx failed, error=" << GetLastError();
-            DebugLog(ss.str());
-            earlyFail();
-            return Napi::Boolean::New(env, false);
-        }
-        DebugLog("initialize(): hook installed");
-
-        // 8. Create the ready event
-        readyEvent_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-
-        // 9. Start the pipe reader thread (it calls ConnectNamedPipe, then reads)
-        pipeStop_          = false;
-        pipeReaderThread_  = std::thread([this]() { PipeReaderThread(); });
-
-        // 10. Post a dummy message to the renderer thread to trigger the hook
-        PostThreadMessageW(rendererThreadId, WM_NULL, 0, 0);
-
-        // 11. Wait for EvtReady (up to 10 s; DLL may retry WinRT init several times)
-        // EvtShutdownComplete also signals readyEvent_ so we fail fast without
-        // sitting out the full timeout if WinRT init is permanently broken.
-        DWORD waitResult = WaitForSingleObject(readyEvent_, 10000);
-        if (waitResult != WAIT_OBJECT_0) {
-            DebugLog("initialize(): timed out waiting for EvtReady");
-        } else if (!initOk_) {
-            DebugLog("initialize(): DLL reported init failure");
-        } else {
-            DebugLog("initialize(): EvtReady received, init complete");
-        }
-
-        CloseHandle(readyEvent_);
-        readyEvent_ = nullptr;
+        DebugLog(std::string("initialize() completed: initOk=") + (initOk_ ? "true" : "false"));
 
         return Napi::Boolean::New(env, initOk_);
     }
@@ -453,16 +322,24 @@ private:
         Napi::Env env = info.Env();
         if (!initOk_) return env.Undefined();
 
-        std::string name     = info[0].As<Napi::String>().Utf8Value();
-        std::string iconName = info.Length() > 1
-            ? info[1].As<Napi::String>().Utf8Value()
-            : std::string("scroll");
+        std::string name     = info[0].As<Napi::String>();
+        std::string iconName = info.Length() > 1 ? info[1].As<Napi::String>().Utf8Value()
+                                                 : std::string("scroll");
 
-        // Payload: "name\0iconName"
-        std::string payload = name + '\0' + iconName;
-        WriteCmdMsg(Msg::CmdAddMenuItem, payload.data(),
-                    static_cast<uint32_t>(payload.size()));
-        DebugLog("addMenuItem: " + name + " (" + iconName + ")");
+        std::wstring wname(name.begin(), name.end());
+        auto icon = IconFromString(iconName);
+
+        // Post work to WinRT thread via PostThreadMessage
+        // We heap-allocate a small payload and free it in the thread.
+        struct Payload { std::wstring name; RadialControllerMenuKnownIcon icon; };
+        auto* p = new Payload{ wname, icon };
+        if (!PostThreadMessageW(winrtThreadId_, WM_USER + 1,
+                                reinterpret_cast<WPARAM>(p), 0)) {
+            DebugLog("addMenuItem failed to post thread message");
+            delete p;
+        } else {
+            DebugLog(std::string("addMenuItem queued: ") + name + " (" + iconName + ")");
+        }
         return env.Undefined();
     }
 
@@ -471,21 +348,32 @@ private:
         Napi::Env env = info.Env();
         if (!initOk_) return env.Undefined();
 
-        std::string name = info[0].As<Napi::String>().Utf8Value();
-        WriteCmdMsg(Msg::CmdRemoveMenuItem, name.data(),
-                    static_cast<uint32_t>(name.size()));
-        DebugLog("removeMenuItem: " + name);
+        std::string name = info[0].As<Napi::String>();
+        std::wstring wname(name.begin(), name.end());
+
+        auto* p = new std::wstring(wname);
+        if (!PostThreadMessageW(winrtThreadId_, WM_USER + 2,
+                                reinterpret_cast<WPARAM>(p), 0)) {
+            DebugLog("removeMenuItem failed to post thread message");
+            delete p;
+        } else {
+            DebugLog(std::string("removeMenuItem queued: ") + name);
+        }
         return env.Undefined();
     }
 
     // clearMenuItems(): void
     Napi::Value ClearMenuItems(const Napi::CallbackInfo& info) {
         if (!initOk_) return info.Env().Undefined();
-        WriteCmdMsg(Msg::CmdClearMenuItems);
-        DebugLog("clearMenuItems");
+        if (!PostThreadMessageW(winrtThreadId_, WM_USER + 3, 0, 0)) {
+            DebugLog("clearMenuItems failed to post thread message");
+        } else {
+            DebugLog("clearMenuItems queued");
+        }
         return info.Env().Undefined();
     }
 
+    // onDebug(cb: (message: string) => void): void
     Napi::Value OnDebug(const Napi::CallbackInfo& info) {
         Napi::Env env = info.Env();
         debugTsfn_ = Napi::ThreadSafeFunction::New(
@@ -493,6 +381,7 @@ private:
         return env.Undefined();
     }
 
+    // onRotate(cb: (delta: number) => void): void
     Napi::Value OnRotate(const Napi::CallbackInfo& info) {
         Napi::Env env = info.Env();
         rotateTsfn_ = Napi::ThreadSafeFunction::New(
@@ -501,6 +390,7 @@ private:
         return env.Undefined();
     }
 
+    // onClick(cb: () => void): void
     Napi::Value OnClick(const Napi::CallbackInfo& info) {
         Napi::Env env = info.Env();
         clickTsfn_ = Napi::ThreadSafeFunction::New(
@@ -508,6 +398,7 @@ private:
         return env.Undefined();
     }
 
+    // onMenuItemSelected(cb: (name: string) => void): void
     Napi::Value OnMenuItemSelected(const Napi::CallbackInfo& info) {
         Napi::Env env = info.Env();
         menuItemSelectedTsfn_ = Napi::ThreadSafeFunction::New(
@@ -515,6 +406,7 @@ private:
         return env.Undefined();
     }
 
+    // onControlAcquired(cb: () => void): void
     Napi::Value OnControlAcquired(const Napi::CallbackInfo& info) {
         Napi::Env env = info.Env();
         controlAcquiredTsfn_ = Napi::ThreadSafeFunction::New(
@@ -522,6 +414,7 @@ private:
         return env.Undefined();
     }
 
+    // onControlLost(cb: () => void): void
     Napi::Value OnControlLost(const Napi::CallbackInfo& info) {
         Napi::Env env = info.Env();
         controlLostTsfn_ = Napi::ThreadSafeFunction::New(
@@ -535,237 +428,346 @@ private:
     }
 
     // -----------------------------------------------------------------------
-    // PipeReaderThread
+    // WinRT worker thread
     // -----------------------------------------------------------------------
-    void PipeReaderThread() {
-        // Wait for DLL to connect to both pipe servers
-        if (ConnectNamedPipe(evtPipeServer_, nullptr) == FALSE) {
-            DWORD err = GetLastError();
-            if (err != ERROR_PIPE_CONNECTED) {
-                DebugLog("PipeReaderThread: ConnectNamedPipe(evt) failed");
-                return;
-            }
+    void WinRTThreadProc() {
+        // STA — required for WinRT
+        HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        if (FAILED(hr)) {
+            DebugLog("WinRT thread: CoInitializeEx failed");
+            SignalInit(false);
+            return;
         }
-        DebugLog("PipeReaderThread: evt pipe connected");
+        DebugLog("WinRT thread: CoInitializeEx succeeded");
 
-        if (ConnectNamedPipe(cmdPipeServer_, nullptr) == FALSE) {
-            DWORD err = GetLastError();
-            if (err != ERROR_PIPE_CONNECTED) {
-                DebugLog("PipeReaderThread: ConnectNamedPipe(cmd) failed");
-                return;
-            }
+        winrt::init_apartment(winrt::apartment_type::single_threaded);
+        winrtThreadId_ = GetCurrentThreadId();
+        DebugLog("WinRT thread: apartment initialized");
+
+        // Register hidden message-only window class
+        WNDCLASSEXW wc{};
+        wc.cbSize        = sizeof(wc);
+        wc.lpfnWndProc   = DefWindowProcW;
+        wc.hInstance     = GetModuleHandleW(nullptr);
+        wc.lpszClassName = kWndClass;
+        RegisterClassExW(&wc); // ok if already registered
+
+        hwnd_ = CreateWindowExW(0, kWndClass, L"DialTools",
+                                0, 0, 0, 0, 0, HWND_MESSAGE,
+                                nullptr, GetModuleHandleW(nullptr), nullptr);
+        if (!hwnd_) {
+            DebugLog("WinRT thread: CreateWindowExW failed");
+            winrt::uninit_apartment();
+            CoUninitialize();
+            SignalInit(false);
+            return;
         }
-        DebugLog("PipeReaderThread: cmd pipe connected");
+        DebugLog("WinRT thread: message-only HWND created");
 
-        // Read messages until stopped
-        while (!pipeStop_) {
-            MsgHdr hdr{};
-            DWORD  totalRead = 0;
-            char*  hdrbuf    = reinterpret_cast<char*>(&hdr);
+        // Use VS Code's renderer window so the custom menu appears when VS Code
+        // is in the foreground. Fall back to our message window if not found.
+        HWND appHwnd = FindVSCodeWindow();
 
-            while (totalRead < sizeof(hdr)) {
-                DWORD read = 0;
-                if (!ReadFile(evtPipeServer_, hdrbuf + totalRead,
-                              static_cast<DWORD>(sizeof(hdr)) - totalRead,
-                              &read, nullptr) || read == 0) {
-                    if (!pipeStop_)
-                        DebugLog("PipeReaderThread: evt pipe read error (header)");
-                    return;
+        if (appHwnd) {
+            DWORD pid = 0;
+            GetWindowThreadProcessId(appHwnd, &pid);
+            wchar_t title[256]{};
+            GetWindowTextW(appHwnd, title, static_cast<int>(std::size(title)));
+            std::ostringstream ds;
+            ds << "WinRT thread: found renderer HWND=0x"
+               << std::hex << reinterpret_cast<uintptr_t>(appHwnd)
+               << " PID=" << std::dec << pid
+               << " title=\"" << std::string(title, title + wcslen(title)) << "\"";
+            DebugLog(ds.str());
+        } else {
+            // Log process ancestry so we can diagnose detection failures.
+            HANDLE dbgSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if (dbgSnap != INVALID_HANDLE_VALUE) {
+                std::map<DWORD, DWORD> dbgParentOf;
+                std::map<DWORD, std::wstring> dbgExeOf;
+                PROCESSENTRY32W dbgPe{ sizeof(dbgPe) };
+                if (Process32FirstW(dbgSnap, &dbgPe)) {
+                    do {
+                        dbgParentOf[dbgPe.th32ProcessID] = dbgPe.th32ParentProcessID;
+                        dbgExeOf[dbgPe.th32ProcessID]    = ToLower(BasenameOfPath(dbgPe.szExeFile));
+                    } while (Process32NextW(dbgSnap, &dbgPe));
                 }
-                totalRead += read;
+                CloseHandle(dbgSnap);
+                std::ostringstream chain;
+                chain << "WinRT thread: renderer not found. PID chain:";
+                DWORD p = GetCurrentProcessId();
+                for (int i = 0; i < 5; ++i) {
+                    chain << " " << p << "(" << std::string(dbgExeOf[p].begin(), dbgExeOf[p].end()) << ")";
+                    auto it = dbgParentOf.find(p);
+                    if (it == dbgParentOf.end() || it->second == 0) break;
+                    p = it->second;
+                }
+                DebugLog(chain.str());
             }
+        }
 
-            std::string payload;
-            if (hdr.dataLen > 0) {
-                payload.resize(hdr.dataLen);
-                totalRead = 0;
-                while (totalRead < hdr.dataLen) {
-                    DWORD read = 0;
-                    if (!ReadFile(evtPipeServer_, &payload[totalRead],
-                                  hdr.dataLen - totalRead, &read, nullptr)
-                        || read == 0) {
-                        if (!pipeStop_)
-                            DebugLog("PipeReaderThread: evt pipe read error (payload)");
-                        return;
+        if (!appHwnd) { appHwnd = hwnd_; }
+
+        if (appHwnd == hwnd_) {
+            DebugLog("WinRT thread: sibling renderer not found; using message-window fallback (custom menu will NOT show)");
+        } else {
+            DebugLog("WinRT thread: using sibling renderer HWND for CreateForWindow");
+        }
+
+        auto logInitFailure = [](HWND attemptedHwnd, HRESULT hresult, const wchar_t* stage) {
+            std::wstringstream ss;
+            ss << L"[DialTools] RadialController init failed at " << stage
+               << L" for HWND=" << attemptedHwnd
+               << L" HRESULT=0x" << std::hex << static_cast<unsigned long>(hresult)
+               << L"\n";
+            OutputDebugStringW(ss.str().c_str());
+        };
+
+        auto tryInitForWindow = [&](HWND target) -> bool {
+            if (!target || !IsWindow(target)) return false;
+            try {
+                auto controllerInterop =
+                    winrt::get_activation_factory<RadialController,
+                                                  IRadialControllerInterop>();
+                winrt::check_hresult(
+                    controllerInterop->CreateForWindow(
+                        target,
+                        winrt::guid_of<RadialController>(),
+                        winrt::put_abi(controller_)));
+
+                auto configInterop =
+                    winrt::get_activation_factory<RadialControllerConfiguration,
+                                                  IRadialControllerConfigurationInterop>();
+                winrt::check_hresult(
+                    configInterop->GetForWindow(
+                        target,
+                        winrt::guid_of<RadialControllerConfiguration>(),
+                        winrt::put_abi(config_)));
+
+                config_.SetDefaultMenuItems(
+                    winrt::single_threaded_vector<RadialControllerSystemMenuItemKind>());
+                return true;
+            } catch (const winrt::hresult_error& e) {
+                controller_ = nullptr;
+                config_ = nullptr;
+                logInitFailure(target, e.code(), L"CreateForWindow/GetForWindow");
+                return false;
+            } catch (...) {
+                controller_ = nullptr;
+                config_ = nullptr;
+                logInitFailure(target, E_FAIL, L"Unknown");
+                return false;
+            }
+        };
+
+        // Try renderer HWND first; if interop rejects it, fall back to the
+        // message window so initialize() still succeeds.
+        bool initialized = false;
+        if (appHwnd != hwnd_) {
+            initialized = tryInitForWindow(appHwnd);
+        }
+        if (!initialized) {
+            initialized = tryInitForWindow(hwnd_);
+        }
+
+        if (!initialized) {
+            DebugLog("WinRT thread: failed to initialize controller/config for all HWND candidates");
+            DestroyWindow(hwnd_);
+            hwnd_ = nullptr;
+            winrt::uninit_apartment();
+            CoUninitialize();
+            SignalInit(false);
+            return;
+        }
+        DebugLog("WinRT thread: controller/config initialized");
+
+        // Ensure the thread message queue exists before JS starts posting
+        // WM_USER work items (menu add/remove/clear).
+        MSG queued{};
+        PeekMessageW(&queued, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
+        DebugLog("WinRT thread: thread message queue ready");
+
+        // Wire up controller events
+        rotationToken_ = controller_.RotationChanged(
+            [this](RadialController const&,
+                   RadialControllerRotationChangedEventArgs const& args) {
+                double delta = args.RotationDeltaInDegrees();
+                if (rotateTsfn_) {
+                        DebugLog("event: rotation changed");
+                    rotateTsfn_.NonBlockingCall(
+                        [delta](Napi::Env env, Napi::Function cb) {
+                            cb.Call({ Napi::Number::New(env, delta) });
+                        });
+                }
+            });
+
+        clickToken_ = controller_.ButtonClicked(
+            [this](RadialController const&,
+                   RadialControllerButtonClickedEventArgs const&) {
+                if (clickTsfn_) {
+                    DebugLog("event: button clicked");
+                    clickTsfn_.NonBlockingCall(
+                        [](Napi::Env env, Napi::Function cb) {
+                            cb.Call({});
+                        });
+                }
+            });
+
+        acquiredToken_ = controller_.ControlAcquired(
+            [this](RadialController const&, winrt::Windows::Foundation::IInspectable const&) {
+                if (controlAcquiredTsfn_) {
+                    DebugLog("event: control acquired");
+                    controlAcquiredTsfn_.NonBlockingCall(
+                        [](Napi::Env env, Napi::Function cb) {
+                            cb.Call({});
+                        });
+                }
+            });
+
+        lostToken_ = controller_.ControlLost(
+            [this](RadialController const&, winrt::Windows::Foundation::IInspectable const&) {
+                if (controlLostTsfn_) {
+                    DebugLog("event: control lost");
+                    controlLostTsfn_.NonBlockingCall(
+                        [](Napi::Env env, Napi::Function cb) {
+                            cb.Call({});
+                        });
+                }
+            });
+
+        DebugLog("WinRT thread: signaling init success");
+        SignalInit(true);
+
+        // Message loop — delivers WinRT events on this STA thread
+        // and receives PostThreadMessage work items from JS thread
+        MSG msg;
+        while (!shouldStop_ && GetMessageW(&msg, nullptr, 0, 0) > 0) {
+            if (msg.hwnd == nullptr) {
+                // Thread message (from PostThreadMessageW)
+                HandleThreadMessage(msg);
+            } else {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+
+        // Cleanup WinRT
+        if (controller_) {
+            DebugLog("WinRT thread: tearing down controller event handlers");
+            controller_.RotationChanged(rotationToken_);
+            controller_.ButtonClicked(clickToken_);
+            controller_.ControlAcquired(acquiredToken_);
+            controller_.ControlLost(lostToken_);
+            controller_ = nullptr;
+        }
+        DebugLog("WinRT thread: cleanup complete");
+        config_ = nullptr;
+        if (hwnd_) { DestroyWindow(hwnd_); hwnd_ = nullptr; }
+        winrt::uninit_apartment();
+        CoUninitialize();
+    }
+
+    // -----------------------------------------------------------------------
+    // Handle WM_USER messages posted by JS-side methods
+    // -----------------------------------------------------------------------
+    void HandleThreadMessage(const MSG& msg) {
+        switch (msg.message) {
+        case WM_USER + 1: { // addMenuItem
+            using Payload = struct { std::wstring name; RadialControllerMenuKnownIcon icon; };
+            auto* p = reinterpret_cast<Payload*>(msg.wParam);
+            try {
+                if (menuItems_.count(p->name) == 0) {
+                    auto item = RadialControllerMenuItem::CreateFromKnownIcon(
+                        winrt::hstring(p->name), p->icon);
+
+                    std::wstring capturedName = p->name;
+                    auto token = item.Invoked(
+                        [this, capturedName](RadialControllerMenuItem const&,
+                                             winrt::Windows::Foundation::IInspectable const&) {
+                            if (menuItemSelectedTsfn_) {
+                                std::string narrow(capturedName.begin(),
+                                                   capturedName.end());
+                                menuItemSelectedTsfn_.NonBlockingCall(
+                                    [narrow](Napi::Env env, Napi::Function cb) {
+                                        cb.Call({ Napi::String::New(env, narrow) });
+                                    });
+                            }
+                        });
+
+                    controller_.Menu().Items().Append(item);
+                    menuItems_[p->name] = { item, token };
+                    if (menuItems_.size() == 1) {
+                        try {
+                            controller_.Menu().SelectMenuItem(item);
+                            DebugLog("selected first custom menu item");
+                        } catch (...) {
+                            DebugLog("failed to select first custom menu item");
+                        }
                     }
-                    totalRead += read;
+                    DebugLog(std::string("menu item added: ") + std::string(p->name.begin(), p->name.end()));
+                } else {
+                    DebugLog(std::string("menu item already exists: ") + std::string(p->name.begin(), p->name.end()));
                 }
+            } catch (...) {
+                DebugLog("menu item add failed in WinRT thread");
             }
-
-            DispatchEvent(hdr.type, payload);
+            delete p;
+            break;
+        }
+        case WM_USER + 2: { // removeMenuItem
+            auto* p = reinterpret_cast<std::wstring*>(msg.wParam);
+            RemoveMenuItemByName(*p);
+            DebugLog(std::string("menu item remove requested: ") + std::string(p->begin(), p->end()));
+            delete p;
+            break;
+        }
+        case WM_USER + 3: { // clearMenuItems
+            auto& items = controller_.Menu().Items();
+            for (auto& [k, v] : menuItems_) {
+                v.item.Invoked(v.invokedToken);
+                uint32_t idx{};
+                if (items.IndexOf(v.item, idx)) items.RemoveAt(idx);
+            }
+            menuItems_.clear();
+            DebugLog("menu items cleared");
+            break;
+        }
+        default: break;
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Dispatch events received from the DLL to JS callbacks
-    // -----------------------------------------------------------------------
-    void DispatchEvent(Msg type, const std::string& payload) {
-        switch (type) {
-        case Msg::EvtReady:
-            DebugLog("event: EvtReady");
-            initOk_ = true;
-            if (readyEvent_) SetEvent(readyEvent_);
-            break;
-
-        case Msg::EvtRotation: {
-            if (payload.size() < sizeof(double)) break;
-            double delta = 0.0;
-            memcpy(&delta, payload.data(), sizeof(double));
-            if (rotateTsfn_) {
-                rotateTsfn_.NonBlockingCall(
-                    [delta](Napi::Env env, Napi::Function cb) {
-                        cb.Call({ Napi::Number::New(env, delta) });
-                    });
-            }
-            break;
+    void RemoveMenuItemByName(const std::wstring& name) {
+        auto it = menuItems_.find(name);
+        if (it == menuItems_.end()) {
+            DebugLog(std::string("remove skipped; menu item not found: ") + std::string(name.begin(), name.end()));
+            return;
         }
-
-        case Msg::EvtButtonClicked:
-            if (clickTsfn_) {
-                clickTsfn_.NonBlockingCall(
-                    [](Napi::Env env, Napi::Function cb) {
-                        cb.Call({});
-                    });
-            }
-            break;
-
-        case Msg::EvtControlAcquired:
-            DebugLog("event: ControlAcquired");
-            if (controlAcquiredTsfn_) {
-                controlAcquiredTsfn_.NonBlockingCall(
-                    [](Napi::Env env, Napi::Function cb) {
-                        cb.Call({});
-                    });
-            }
-            break;
-
-        case Msg::EvtControlLost:
-            DebugLog("event: ControlLost");
-            if (controlLostTsfn_) {
-                controlLostTsfn_.NonBlockingCall(
-                    [](Napi::Env env, Napi::Function cb) {
-                        cb.Call({});
-                    });
-            }
-            break;
-
-        case Msg::EvtMenuItemSelected:
-            if (menuItemSelectedTsfn_) {
-                auto name = std::make_shared<std::string>(payload);
-                menuItemSelectedTsfn_.NonBlockingCall(
-                    [name](Napi::Env env, Napi::Function cb) {
-                        cb.Call({ Napi::String::New(env, *name) });
-                    });
-            }
-            break;
-
-        case Msg::EvtShutdownComplete:
-            DebugLog("event: ShutdownComplete");
-            pipeStop_ = true;
-            if (readyEvent_) SetEvent(readyEvent_);  // unblock initialize() fast on early DLL failure
-            break;
-
-        case Msg::EvtDebug:
-            DebugLog(payload);
-            break;
-
-        default:
-            break;
-        }
+        it->second.item.Invoked(it->second.invokedToken);
+        auto& items = controller_.Menu().Items();
+        uint32_t idx{};
+        if (items.IndexOf(it->second.item, idx)) items.RemoveAt(idx);
+        menuItems_.erase(it);
+        DebugLog(std::string("menu item removed: ") + std::string(name.begin(), name.end()));
     }
 
     // -----------------------------------------------------------------------
-    // WriteCmdMsg — mutex-protected write to the command pipe
+    // Helpers
     // -----------------------------------------------------------------------
-    bool WriteCmdMsg(Msg type, const void* data = nullptr, uint32_t dataLen = 0) {
-        std::lock_guard<std::mutex> lk(cmdMutex_);
-        if (cmdPipeServer_ == INVALID_HANDLE_VALUE) return false;
-        MsgHdr hdr{ type, dataLen };
-        if (!WriteExact(cmdPipeServer_, &hdr, sizeof(hdr))) return false;
-        if (dataLen && data) return WriteExact(cmdPipeServer_, data, dataLen);
-        return true;
+    void SignalInit(bool ok) {
+        std::lock_guard<std::mutex> lock(initMutex_);
+        initOk_      = ok;
+        initComplete_ = true;
+        initCv_.notify_all();
     }
 
-    // -----------------------------------------------------------------------
-    // Cleanup
-    // -----------------------------------------------------------------------
     void Cleanup() {
         DebugLog("cleanup() called");
-
-        if (initOk_) {
-            WriteCmdMsg(Msg::CmdShutdown);
+        if (winrtThread_.joinable()) {
+            shouldStop_ = true;
+            if (winrtThreadId_) PostThreadMessageW(winrtThreadId_, WM_QUIT, 0, 0);
+            winrtThread_.join();
+            DebugLog("cleanup(): WinRT thread joined");
         }
-
-        pipeStop_ = true;
-
-        // Wait for PipeReaderThread to exit naturally: the DLL sends EvtShutdownComplete,
-        // then closes its pipe handle, which unblocks our ReadFile and lets the thread exit.
-        // This gives us a reliable signal that the DLL has finished all WinRT teardown.
-        // Fallback: if the DLL doesn't respond within 3 s (crash, deadlock), force-close
-        // evtPipeServer_ to unblock ReadFile and proceed anyway.
-        if (pipeReaderThread_.joinable()) {
-            constexpr DWORD kShutdownTimeoutMs = 3000;
-            DWORD waitResult = WaitForSingleObject(
-                pipeReaderThread_.native_handle(), kShutdownTimeoutMs);
-            if (waitResult == WAIT_TIMEOUT) {
-                DebugLog("cleanup(): DLL shutdown timed out — force-closing event pipe");
-                if (evtPipeServer_ != INVALID_HANDLE_VALUE) {
-                    CloseHandle(evtPipeServer_);
-                    evtPipeServer_ = INVALID_HANDLE_VALUE;
-                }
-            }
-            pipeReaderThread_.join();
-        }
-
-        if (evtPipeServer_ != INVALID_HANDLE_VALUE) {
-            CloseHandle(evtPipeServer_);
-            evtPipeServer_ = INVALID_HANDLE_VALUE;
-        }
-
-        DebugLog("cleanup(): pipe reader thread joined");
-
-        // Safe to unhook now: DLL sent EvtShutdownComplete (or timed out).
-        // The DLL holds its own extra refcount via GetModuleHandleEx in GetMsgProc
-        // and releases it via FreeLibraryAndExitThread, so UnhookWindowsHookEx
-        // will not drop the refcount to zero while DLL code is still executing.
-        if (hook_) {
-            UnhookWindowsHookEx(hook_);
-            hook_ = nullptr;
-        }
-
-        if (cmdPipeServer_ != INVALID_HANDLE_VALUE) {
-            CloseHandle(cmdPipeServer_);
-            cmdPipeServer_ = INVALID_HANDLE_VALUE;
-        }
-
-        if (hDll_) {
-            DebugLog("cleanup(): FreeLibrary(hDll_) — releasing DLL from extension host (PID "
-                + std::to_string(GetCurrentProcessId()) + ")");
-            FreeLibrary(hDll_);
-            hDll_ = nullptr;
-            DebugLog("cleanup(): FreeLibrary done");
-        }
-
-        // Delete the session temp copy. By this point Cleanup() has already
-        // received EvtShutdownComplete (meaning the DLL called
-        // FreeLibraryAndExitThread in the renderer), so both refcounts are gone.
-        if (!tempDllPath_.empty()) {
-            std::string tp(tempDllPath_.begin(), tempDllPath_.end());
-            DebugLog("cleanup(): deleting temp DLL: " + tp);
-            if (DeleteFileW(tempDllPath_.c_str())) {
-                DebugLog("cleanup(): temp DLL deleted");
-            } else {
-                DWORD err = GetLastError();
-                DebugLog("cleanup(): DeleteFile failed (error=" + std::to_string(err)
-                    + "), scheduling delete on reboot");
-                MoveFileExW(tempDllPath_.c_str(), nullptr, MOVEFILE_DELAY_UNTIL_REBOOT);
-            }
-            tempDllPath_.clear();
-        }
-
-        initOk_       = false;
-        tsfnsCreated_ = false;
-
         // Release TSFNs
         auto releaseTsfn = [](Napi::ThreadSafeFunction& fn) {
             if (fn) { fn.Release(); fn = Napi::ThreadSafeFunction{}; }
@@ -776,13 +778,8 @@ private:
         releaseTsfn(controlAcquiredTsfn_);
         releaseTsfn(controlLostTsfn_);
         releaseTsfn(debugTsfn_);
-
-        DebugLog("cleanup(): complete");
     }
 
-    // -----------------------------------------------------------------------
-    // DebugLog
-    // -----------------------------------------------------------------------
     void DebugLog(const std::string& msg) {
         std::string prefixed = std::string("native: ") + msg;
         if (debugTsfn_) {
@@ -798,7 +795,7 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// Module entry point — also used as address for GetModuleHandleEx
+// Module entry point
 // ---------------------------------------------------------------------------
 Napi::Object ModuleInit(Napi::Env env, Napi::Object exports) {
     RadialControllerAddon::Init(env, exports);

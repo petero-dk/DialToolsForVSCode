@@ -20,6 +20,38 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Install MSVC v143 ARM64 toolset
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) {
+            throw "vswhere.exe not found at $vswhere"
+          }
+
+          $installPath = & $vswhere -latest -products * -property installationPath
+          if (-not $installPath) {
+            throw "No Visual Studio installation found"
+          }
+
+          $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
+          if (-not (Test-Path $installer)) {
+            $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
+          }
+          if (-not (Test-Path $installer)) {
+            throw "Visual Studio installer not found"
+          }
+
+          # Ensure the toolset requested by node-gyp (v143) exists for x64 + ARM64 builds.
+          & $installer modify `
+            --installPath "$installPath" `
+            --quiet --wait --norestart --nocache `
+            --add Microsoft.VisualStudio.Component.VC.v143.x86.x64 `
+            --add Microsoft.VisualStudio.Component.VC.v143.ARM64
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Visual Studio component install failed with exit code $LASTEXITCODE"
+          }
+
       - name: Install dependencies
         run: npm install
 
