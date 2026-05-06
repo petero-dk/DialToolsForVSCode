@@ -19,7 +19,6 @@ const rebuild    = process.argv[2] === 'rebuild';
 const targetArch = process.env.TARGET_ARCH || process.arch;
 const hostArch   = process.arch === 'arm64' ? 'arm64' : 'x64';
 const archArg    = `--arch=${targetArch}`;
-const action     = rebuild ? `rebuild ${archArg}` : `configure ${archArg} build`;
 
 // Locate VsDevCmd.bat via vswhere
 function findVsDevCmd() {
@@ -33,27 +32,77 @@ function findVsDevCmd() {
     } catch { return null; }
 }
 
+function findVsMajorVersion() {
+    const vsWhere = 'C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe';
+    if (!fs.existsSync(vsWhere)) { return null; }
+    try {
+        const out = execFileSync(vsWhere, ['-latest', '-property', 'installationPath'],
+                                 { encoding: 'utf8' }).trim();
+        const match = out.match(/\\(\d+)\\[^\\]+$/);
+        return match ? Number(match[1]) : null;
+    } catch {
+        return null;
+    }
+}
+
+function toolsetForVsMajor(major) {
+    if (major >= 18) {
+        return 'v180';
+    }
+    return null;
+}
+
 const vsDevCmd = findVsDevCmd();
 const nodeGyp  = path.join(__dirname, '..', 'node_modules', 'node-gyp', 'bin', 'node-gyp.js');
+const retarget = path.join(__dirname, 'retarget-vcxproj-toolset.js');
 const nativeDir = path.join(__dirname, '..', 'native');
 const logFile   = path.join(os.tmpdir(), 'dial-tools-native-build.log');
+const toolset   = toolsetForVsMajor(findVsMajorVersion());
+
+const gypCleanLine = `node "${nodeGyp}" clean > "${logFile}" 2>&1`;
+const gypConfigureLine = `node "${nodeGyp}" configure ${archArg} > "${logFile}" 2>&1`;
+const gypBuildLine = `node "${nodeGyp}" build > "${logFile}" 2>&1`;
+const retargetLine = toolset
+    ? `node "${retarget}" ${toolset} >> "${logFile}" 2>&1`
+    : null;
 
 let batContent;
-const gypLine = `node "${nodeGyp}" ${action} > "${logFile}" 2>&1`;
 
 if (vsDevCmd) {
-    batContent = [
+    const lines = [
         `@echo off`,
         `call "${vsDevCmd}" -arch=${targetArch} -host_arch=${hostArch}`,
         `cd /d "${nativeDir}"`,
-        gypLine,
-    ].join('\r\n');
+    ];
+    if (rebuild) {
+        lines.push(gypCleanLine);
+        lines.push(`if errorlevel 1 exit /b %errorlevel%`);
+    }
+    lines.push(gypConfigureLine);
+    lines.push(`if errorlevel 1 exit /b %errorlevel%`);
+    if (retargetLine) {
+        lines.push(retargetLine);
+        lines.push(`if errorlevel 1 exit /b %errorlevel%`);
+    }
+    lines.push(gypBuildLine);
+    batContent = lines.join('\r\n');
 } else {
-    batContent = [
+    const lines = [
         `@echo off`,
         `cd /d "${nativeDir}"`,
-        gypLine,
-    ].join('\r\n');
+    ];
+    if (rebuild) {
+        lines.push(gypCleanLine);
+        lines.push(`if errorlevel 1 exit /b %errorlevel%`);
+    }
+    lines.push(gypConfigureLine);
+    lines.push(`if errorlevel 1 exit /b %errorlevel%`);
+    if (retargetLine) {
+        lines.push(retargetLine);
+        lines.push(`if errorlevel 1 exit /b %errorlevel%`);
+    }
+    lines.push(gypBuildLine);
+    batContent = lines.join('\r\n');
 }
 
 const batFile = path.join(os.tmpdir(), 'dial-tools-build.bat');
