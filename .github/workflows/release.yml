@@ -11,7 +11,7 @@ jobs:
     strategy:
       matrix:
         arch: [x64, arm64]
-    runs-on: windows-2022
+    runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v4
