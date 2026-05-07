@@ -28,7 +28,7 @@ const patched = `    if (ret.versionMajor === 17) {
       return ret
     }
     if (ret.versionMajor === 18) {
-      ret.versionYear = 2022
+      ret.versionYear = 2026
       return ret
     }`;
 
